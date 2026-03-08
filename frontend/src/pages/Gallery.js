@@ -6,6 +6,7 @@ import {
   ChevronRight,
   FileImage,
   FlipHorizontal2,
+  Info,
   Loader,
   Monitor,
   RotateCw,
@@ -35,6 +36,7 @@ function Gallery() {
   const [taskKind, setTaskKind] = useState(null);
   const [imageRevision, setImageRevision] = useState(0);
   const [deleteNotice, setDeleteNotice] = useState(null);
+  const [infoCollapsed, setInfoCollapsed] = useState(false);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [isPanning, setIsPanning] = useState(false);
@@ -68,6 +70,21 @@ function Gallery() {
   const displayedSize = isShowingWebVersion
     ? (currentPhoto?.web_size || currentPhoto?.size)
     : currentPhoto?.size;
+  const hasGpsCoordinates = currentPhoto?.gps_latitude != null && currentPhoto?.gps_longitude != null;
+  const mapBounds = hasGpsCoordinates
+    ? {
+        left: currentPhoto.gps_longitude - 0.02,
+        right: currentPhoto.gps_longitude + 0.02,
+        top: currentPhoto.gps_latitude + 0.02,
+        bottom: currentPhoto.gps_latitude - 0.02
+      }
+    : null;
+  const embeddedMapUrl = hasGpsCoordinates
+    ? `https://www.openstreetmap.org/export/embed.html?bbox=${mapBounds.left}%2C${mapBounds.bottom}%2C${mapBounds.right}%2C${mapBounds.top}&layer=mapnik&marker=${currentPhoto.gps_latitude}%2C${currentPhoto.gps_longitude}`
+    : null;
+  const mapLinkUrl = hasGpsCoordinates
+    ? `https://www.openstreetmap.org/?mlat=${currentPhoto.gps_latitude}&mlon=${currentPhoto.gps_longitude}#map=14/${currentPhoto.gps_latitude}/${currentPhoto.gps_longitude}`
+    : null;
 
   useEffect(() => {
     loadPhotos();
@@ -578,70 +595,105 @@ function Gallery() {
           </button>
 
           <div className="photo-container" key={`${currentPhoto.id}-${isShowingWebVersion ? 'web' : 'original'}`}>
-            <div className="photo-info">
-              <h3>{currentPhoto.filename}</h3>
-              <span className="version-indicator">
-                Visualizzazione: {isShowingWebVersion ? 'Web' : 'Originale'}
-              </span>
-              <span className="photo-meta">
-                Risoluzione: {displayedWidth || '?'} x {displayedHeight || '?'}
-              </span>
-              <span className="photo-meta">
-                Dimensione: {formatFileSize(displayedSize)}
-              </span>
-              {currentPhoto.camera_model && (
-                <span className="photo-meta">
-                  Fotocamera: {currentPhoto.camera_model}
-                </span>
-              )}
-              {currentPhoto.date_taken && (
-                <span className="photo-meta">
-                  Data: {new Date(currentPhoto.date_taken).toLocaleString()}
-                </span>
-              )}
-              {(currentPhoto.gps_latitude || currentPhoto.gps_longitude) && (
-                <span className="photo-meta">
-                  Posizione: {currentPhoto.gps_latitude ?? '?'}, {currentPhoto.gps_longitude ?? '?'}
-                </span>
-              )}
-              {deleteNotice && (
-                <div className="delete-notice">
-                  <div className="delete-notice-text">
-                    <span>{deleteNotice.filename} moved to cancellate.</span>
-                  </div>
-                  <div className="delete-notice-actions">
-                    <button className="btn btn-secondary" onClick={handleUndoDelete}>
-                      Undo
-                    </button>
-                    <button
-                      className="delete-notice-close"
-                      onClick={() => setDeleteNotice(null)}
-                      title="Close"
-                    >
-                      <X size={16} />
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-            <div
-              className={`main-photo-stage ${zoom > 1 ? 'is-zoomed' : ''} ${isPanning ? 'is-panning' : ''}`}
-              onWheel={handleWheelZoom}
-              onPointerMove={handlePointerMove}
-              onPointerUp={handlePointerUp}
-              onPointerLeave={handlePointerUp}
-            >
-              <img
-                key={mainPhotoSrc}
-                src={mainPhotoSrc}
-                alt={currentPhoto.filename}
-                className="main-photo"
-                onPointerDown={handlePointerDown}
-                draggable={false}
-                style={{
-                  transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`
-                }}
-              />
+            <div className="viewer-layout">
+              <div className={`photo-info ${infoCollapsed ? 'is-collapsed' : ''}`}>
+                <button
+                  className="photo-info-toggle"
+                  onClick={() => setInfoCollapsed((prev) => !prev)}
+                  title={infoCollapsed ? 'Show info' : 'Hide info'}
+                >
+                  <Info size={16} />
+                  <span>{infoCollapsed ? 'Info' : 'Hide'}</span>
+                </button>
+
+                {!infoCollapsed && (
+                  <>
+                    <h3>{currentPhoto.filename}</h3>
+                    <span className="version-indicator">
+                      Visualizzazione: {isShowingWebVersion ? 'Web' : 'Originale'}
+                    </span>
+                    <span className="photo-meta">
+                      Risoluzione: {displayedWidth || '?'} x {displayedHeight || '?'}
+                    </span>
+                    <span className="photo-meta">
+                      Dimensione: {formatFileSize(displayedSize)}
+                    </span>
+                    {currentPhoto.camera_model && (
+                      <span className="photo-meta">
+                        Fotocamera: {currentPhoto.camera_model}
+                      </span>
+                    )}
+                    {currentPhoto.date_taken && (
+                      <span className="photo-meta">
+                        Data: {new Date(currentPhoto.date_taken).toLocaleString()}
+                      </span>
+                    )}
+                    {(currentPhoto.gps_latitude || currentPhoto.gps_longitude) && (
+                      <span className="photo-meta">
+                        Posizione: {currentPhoto.gps_latitude ?? '?'}, {currentPhoto.gps_longitude ?? '?'}
+                      </span>
+                    )}
+                    {hasGpsCoordinates && (
+                      <div className="photo-map">
+                        <iframe
+                          title={`Map for ${currentPhoto.filename}`}
+                          src={embeddedMapUrl}
+                          className="photo-map-frame"
+                          loading="lazy"
+                          referrerPolicy="no-referrer-when-downgrade"
+                        />
+                        <a
+                          href={mapLinkUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="photo-map-link"
+                        >
+                          Open map
+                        </a>
+                      </div>
+                    )}
+                    {deleteNotice && (
+                      <div className="delete-notice">
+                        <div className="delete-notice-text">
+                          <span>{deleteNotice.filename} moved to cancellate.</span>
+                        </div>
+                        <div className="delete-notice-actions">
+                          <button className="btn btn-secondary" onClick={handleUndoDelete}>
+                            Undo
+                          </button>
+                          <button
+                            className="delete-notice-close"
+                            onClick={() => setDeleteNotice(null)}
+                            title="Close"
+                          >
+                            <X size={16} />
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+
+              <div
+                className={`main-photo-stage ${zoom > 1 ? 'is-zoomed' : ''} ${isPanning ? 'is-panning' : ''}`}
+                onWheel={handleWheelZoom}
+                onPointerMove={handlePointerMove}
+                onPointerUp={handlePointerUp}
+                onPointerLeave={handlePointerUp}
+              >
+                <img
+                  key={mainPhotoSrc}
+                  src={mainPhotoSrc}
+                  alt={currentPhoto.filename}
+                  className="main-photo"
+                  onPointerDown={handlePointerDown}
+                  draggable={false}
+                  style={{
+                    transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`
+                  }}
+                />
+              </div>
             </div>
           </div>
 
