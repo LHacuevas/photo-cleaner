@@ -10,34 +10,44 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 1rem 2rem;
+  padding: 0.35rem 0.75rem;
   background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%);
   border-bottom: 1px solid #333;
-  gap: 2rem;
+  gap: 0.6rem;
 }
 
 .gallery-info {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 0.5rem;
+  gap: 0.2rem;
   flex: 1;
+  min-width: 0;
 }
 
 .gallery-info h2 {
-  font-size: 1.2rem;
+  font-size: 0.95rem;
   margin: 0;
+  line-height: 1.1;
 }
 
 .gallery-actions {
   display: flex;
-  gap: 0.5rem;
+  gap: 0.25rem;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.gallery-actions .btn {
+  padding: 0.5rem 0.85rem;
+  font-size: 0.85rem;
+  gap: 0.35rem;
+  border-radius: 7px;
 }
 
 .gallery-content {
   flex: 1;
   display: flex;
-  gap: 1rem;
   padding: 1rem;
   overflow: hidden;
 }
@@ -48,35 +58,53 @@
   align-items: center;
   justify-content: center;
   position: relative;
-  padding: 2rem;
+  padding: 0.75rem;
   background: #1a1a1a;
   border-radius: 8px;
   overflow: hidden;
 }
 
-.exif-sidebar {
-  width: 300px;
-  background: #1a1a1a;
-  border-radius: 8px;
-  overflow-y: auto;
-  flex-shrink: 0;
-}
-
 .photo-container {
-  max-width: 90%;
-  max-height: 90%;
+  width: 100%;
+  height: 100%;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 1rem;
+  gap: 0.5rem;
+  min-height: 0;
+}
+
+.main-photo-stage {
+  position: relative;
+  width: 100%;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: zoom-in;
+  touch-action: none;
+}
+
+.main-photo-stage.is-zoomed {
+  cursor: grab;
+}
+
+.main-photo-stage.is-panning {
+  cursor: grabbing;
 }
 
 .main-photo {
   max-width: 100%;
-  max-height: calc(100vh - 300px);
+  max-height: 100%;
   object-fit: contain;
   border-radius: 8px;
   box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+  transition: transform 0.08s ease-out;
+  transform-origin: center center;
+  user-select: none;
+  will-change: transform;
 }
 
 .photo-filename {
@@ -116,18 +144,18 @@
 .thumbnail-strip {
   display: flex;
   gap: 0.5rem;
-  padding: 1rem 2rem;
+  padding: 0.6rem 1.25rem;
   overflow-x: auto;
   background: #1a1a1a;
   border-top: 1px solid #333;
-  max-height: 130px;
+  max-height: 96px;
 }
 
 .thumbnail {
   position: relative;
   flex-shrink: 0;
-  width: 100px;
-  height: 100px;
+  width: 72px;
+  height: 72px;
   cursor: pointer;
   border-radius: 4px;
   overflow: hidden;
@@ -145,6 +173,12 @@
   box-shadow: 0 0 20px rgba(59, 130, 246, 0.5);
 }
 
+.thumbnail.selected {
+  border-color: #10b981;
+  box-shadow: 0 0 15px rgba(16, 185, 129, 0.5);
+  background: rgba(16, 185, 129, 0.1);
+}
+
 .thumbnail img {
   width: 100%;
   height: 100%;
@@ -159,16 +193,22 @@
   filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.5));
 }
 
-.keyboard-hints {
+.selection-badge {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 36px;
+  height: 36px;
+  background: #10b981;
+  border-radius: 50%;
   display: flex;
-  gap: 2rem;
+  align-items: center;
   justify-content: center;
-  padding: 0.75rem;
-  background: #0a0a0a;
-  border-top: 1px solid #333;
-  font-size: 0.85rem;
-  color: #666;
-  flex-wrap: wrap;
+  color: white;
+  font-weight: bold;
+  font-size: 1.2rem;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
 }
 
 .gallery-loading,
@@ -190,17 +230,6 @@
   box-shadow: 0 10px 25px rgba(251, 191, 36, 0.3);
 }
 
-@media (max-width: 1024px) {
-  .gallery-content {
-    flex-direction: column;
-  }
-  
-  .exif-sidebar {
-    width: 100%;
-    max-height: 250px;
-  }
-}
-
 @media (max-width: 768px) {
   .gallery-header {
     flex-direction: column;
@@ -213,11 +242,89 @@
   }
   
   .thumbnail {
-    width: 80px;
-    height: 80px;
+    width: 64px;
+    height: 64px;
   }
-  
-  .exif-sidebar {
-    display: none;
-  }
+}
+
+/* Photo info section */
+.photo-info {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  background: rgba(0, 0, 0, 0.8);
+  color: white;
+  padding: 1rem;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  z-index: 10;
+  max-width: 340px;
+  min-width: 260px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+}
+
+.photo-info h3 {
+  margin: 0 0 0.5rem 0;
+  font-size: 1.1rem;
+  font-weight: bold;
+}
+
+.version-indicator {
+  font-weight: bold;
+  color: #4CAF50;
+  display: inline-block;
+  margin-top: 0.25rem;
+  padding: 0.25rem 0.5rem;
+  background: rgba(76, 175, 80, 0.1);
+  border-radius: 4px;
+  font-size: 0.85rem;
+}
+
+.photo-meta {
+  display: block;
+  margin-top: 0.5rem;
+  color: #d1d5db;
+  font-size: 0.85rem;
+  line-height: 1.35;
+  word-break: break-word;
+}
+
+.delete-notice {
+  margin-top: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  background: rgba(10, 10, 10, 0.94);
+  color: #f3f4f6;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.25);
+}
+
+.delete-notice-text {
+  line-height: 1.35;
+}
+
+.delete-notice-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.delete-notice-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #f3f4f6;
+  cursor: pointer;
+}
+
+.delete-notice-close:hover {
+  background: rgba(255, 255, 255, 0.14);
 }

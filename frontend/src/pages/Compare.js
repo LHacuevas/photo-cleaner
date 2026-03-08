@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Loader, Trash2, SkipForward, ChevronLeft, ChevronRight } from 'lucide-react';
-import { similarAPI, photosAPI } from '../services/api';
+import React, { useEffect, useState } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
+import { ArrowLeft, ChevronLeft, ChevronRight, FileImage, Loader, Monitor, SkipForward, Trash2 } from 'lucide-react';
+import { photosAPI, similarAPI } from '../services/api';
 import ProgressBar from '../components/ProgressBar';
 import './Compare.css';
 
@@ -12,8 +12,8 @@ function Compare() {
   const [groups, setGroups] = useState([]);
   const [currentGroupIdx, setCurrentGroupIdx] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [analyzing, setAnalyzing] = useState(false);
   const [selectedPhotos, setSelectedPhotos] = useState([]);
+  const [photoVersions, setPhotoVersions] = useState({});
 
   useEffect(() => {
     loadGroups();
@@ -22,12 +22,17 @@ function Compare() {
   const loadGroups = async () => {
     try {
       setLoading(true);
-      // First, analyze for similar photos
       await similarAPI.analyze(folderId);
-      // Then get grouped results
-      const response = await similarAPI.getGroups(folderId, false);
-      setGroups(response.data.groups || []);
+      const groupsResponse = await similarAPI.getGroups(folderId, false);
+      const groupSummaries = groupsResponse.data.groups || [];
+      const detailResponses = await Promise.all(
+        groupSummaries.map((group) => similarAPI.getGroup(group.id))
+      );
+      const nextGroups = detailResponses.map((response) => response.data);
+      setGroups(nextGroups);
+      setCurrentGroupIdx(0);
       setSelectedPhotos([]);
+      setPhotoVersions({});
     } catch (error) {
       console.error('Error loading groups:', error);
       alert('Error loading similar photos. Make sure to analyze first.');
@@ -36,19 +41,69 @@ function Compare() {
     }
   };
 
-  const handleSelectPhoto = (photoId) => {
-    if (selectedPhotos.includes(photoId)) {
-      setSelectedPhotos(selectedPhotos.filter(id => id !== photoId));
-    } else {
-      setSelectedPhotos([...selectedPhotos, photoId]);
+  const currentGroup = groups[currentGroupIdx];
+
+  const formatFileSize = (bytes) => {
+    if (!bytes) {
+      return 'N/A';
     }
+
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    const exponent = Math.min(
+      Math.floor(Math.log(bytes) / Math.log(1024)),
+      units.length - 1
+    );
+    const value = bytes / (1024 ** exponent);
+    return `${value.toFixed(value >= 10 || exponent === 0 ? 0 : 1)} ${units[exponent]}`;
+  };
+
+  const isPhotoUsingWeb = (photo) => Boolean(photo.has_web && photoVersions[photo.id]);
+
+  const getDisplayedDimensions = (photo) => ({
+    width: isPhotoUsingWeb(photo) ? (photo.web_width || photo.width) : photo.width,
+    height: isPhotoUsingWeb(photo) ? (photo.web_height || photo.height) : photo.height
+  });
+
+  const getDisplayedSize = (photo) => (
+    isPhotoUsingWeb(photo) ? (photo.web_size || photo.size) : photo.size
+  );
+
+  const handleSelectPhoto = (photoId) => {
+    setSelectedPhotos((prev) => (
+      prev.includes(photoId)
+        ? prev.filter((id) => id !== photoId)
+        : [...prev, photoId]
+    ));
   };
 
   const handleSelectByNumber = (number) => {
-    const current = currentGroup;
-    if (number > 0 && number <= current.photos.length) {
-      handleSelectPhoto(current.photos[number - 1].id);
+    if (!currentGroup || number < 1 || number > currentGroup.photos.length) {
+      return;
     }
+    handleSelectPhoto(currentGroup.photos[number - 1].id);
+  };
+
+  const handleTogglePhotoVersion = (event, photo) => {
+    event.stopPropagation();
+    if (!photo.has_web) {
+      return;
+    }
+
+    setPhotoVersions((prev) => ({
+      ...prev,
+      [photo.id]: !prev[photo.id]
+    }));
+  };
+
+  const moveToNextGroup = () => {
+    if (currentGroupIdx < groups.length - 1) {
+      setCurrentGroupIdx((prev) => prev + 1);
+      setSelectedPhotos([]);
+      return;
+    }
+
+    alert('All groups reviewed!');
+    navigate(`/gallery/${folderId}`);
   };
 
   const handleDeleteSelected = async () => {
@@ -62,13 +117,8 @@ function Compare() {
     }
 
     try {
-      // Delete selected photos
-      await Promise.all(
-        selectedPhotos.map(photoId => photosAPI.delete(photoId))
-      );
-      
-      // Move to next group
-      handleSkipGroup();
+      await Promise.all(selectedPhotos.map((photoId) => photosAPI.delete(photoId)));
+      moveToNextGroup();
     } catch (error) {
       console.error('Error deleting photos:', error);
       alert('Error deleting photos');
@@ -76,10 +126,9 @@ function Compare() {
   };
 
   const handleDeleteOthers = async () => {
-    const current = currentGroup;
-    const othersToDelete = current.photos
-      .filter(p => !selectedPhotos.includes(p.id))
-      .map(p => p.id);
+    const othersToDelete = currentGroup.photos
+      .filter((photo) => !selectedPhotos.includes(photo.id))
+      .map((photo) => photo.id);
 
     if (othersToDelete.length === 0) {
       alert('No other photos to delete');
@@ -91,13 +140,8 @@ function Compare() {
     }
 
     try {
-      // Delete other photos
-      await Promise.all(
-        othersToDelete.map(photoId => photosAPI.delete(photoId))
-      );
-      
-      // Move to next group
-      handleSkipGroup();
+      await Promise.all(othersToDelete.map((photoId) => photosAPI.delete(photoId)));
+      moveToNextGroup();
     } catch (error) {
       console.error('Error deleting photos:', error);
       alert('Error deleting photos');
@@ -106,39 +150,30 @@ function Compare() {
 
   const handleSkipGroup = async () => {
     try {
-      const current = currentGroup;
-      await similarAPI.skipGroup(current.id);
-      
-      if (currentGroupIdx < groups.length - 1) {
-        setCurrentGroupIdx(currentGroupIdx + 1);
-        setSelectedPhotos([]);
-      } else {
-        alert('✅ All groups reviewed!');
-        navigate(`/gallery/${folderId}`);
-      }
+      await similarAPI.skipGroup(currentGroup.id);
+      moveToNextGroup();
     } catch (error) {
       console.error('Error skipping group:', error);
     }
   };
 
-  // Keyboard shortcuts
   useEffect(() => {
-    const handleKeyPress = (e) => {
-      if (loading || groups.length === 0) return;
-
-      // Numbers 1-4 for selecting photos
-      if (e.key >= '1' && e.key <= '4') {
-        handleSelectByNumber(parseInt(e.key));
+    const handleKeyPress = (event) => {
+      if (loading || groups.length === 0) {
+        return;
       }
 
-      // Arrow keys for navigation
-      switch(e.key) {
+      if (event.key >= '1' && event.key <= '9') {
+        handleSelectByNumber(parseInt(event.key, 10));
+      }
+
+      switch (event.key) {
         case 'ArrowLeft':
-          if (currentGroupIdx > 0) setCurrentGroupIdx(currentGroupIdx - 1);
+          setCurrentGroupIdx((prev) => Math.max(0, prev - 1));
           setSelectedPhotos([]);
           break;
         case 'ArrowRight':
-          if (currentGroupIdx < groups.length - 1) setCurrentGroupIdx(currentGroupIdx + 1);
+          setCurrentGroupIdx((prev) => Math.min(groups.length - 1, prev + 1));
           setSelectedPhotos([]);
           break;
         case 's':
@@ -152,7 +187,7 @@ function Compare() {
 
     window.addEventListener('keydown', handleKeyPress);
     return () => window.removeEventListener('keydown', handleKeyPress);
-  }, [currentGroupIdx, groups, loading]);
+  }, [currentGroup, currentGroupIdx, groups, loading, selectedPhotos]);
 
   if (loading) {
     return (
@@ -175,9 +210,6 @@ function Compare() {
     );
   }
 
-  const currentGroup = groups[currentGroupIdx];
-  const progressPercentage = ((currentGroupIdx + 1) / groups.length) * 100;
-
   return (
     <div className="compare-page">
       <div className="compare-header">
@@ -187,7 +219,7 @@ function Compare() {
         </button>
 
         <div className="compare-info">
-          <h2>🔍 Find & Remove Duplicates</h2>
+          <h2>Find and Remove Duplicates</h2>
           <ProgressBar current={currentGroupIdx + 1} total={groups.length} />
         </div>
 
@@ -198,33 +230,58 @@ function Compare() {
 
       <div className="compare-content">
         <div className="photos-grid">
-          {currentGroup.photos.map((photo, idx) => (
-            <div
-              key={photo.id}
-              className={`photo-card ${selectedPhotos.includes(photo.id) ? 'selected' : ''}`}
-              onClick={() => handleSelectPhoto(photo.id)}
-            >
-              <div className="card-number">{idx + 1}</div>
-              <img
-                src={photosAPI.getFile(photo.id, true) || photosAPI.getFile(photo.id, false)}
-                alt={photo.filename}
-                className="card-image"
-              />
-              <div className="card-info">
-                <div className="filename">{photo.filename}</div>
-                <div className="checkbox">
-                  <input
-                    type="checkbox"
-                    checked={selectedPhotos.includes(photo.id)}
-                    onChange={(e) => {
-                      e.stopPropagation();
-                      handleSelectPhoto(photo.id);
-                    }}
-                  />
+          {currentGroup.photos.map((photo, index) => {
+            const showingWeb = isPhotoUsingWeb(photo);
+            const displayedDimensions = getDisplayedDimensions(photo);
+            const displayedSize = getDisplayedSize(photo);
+
+            return (
+              <div
+                key={`${photo.id}-${showingWeb ? 'web' : 'original'}`}
+                className={`photo-card ${selectedPhotos.includes(photo.id) ? 'selected' : ''}`}
+                onClick={() => handleSelectPhoto(photo.id)}
+              >
+                <div className="card-number">{index + 1}</div>
+
+                <button
+                  className={`card-version-btn ${showingWeb ? 'is-web' : ''}`}
+                  onClick={(event) => handleTogglePhotoVersion(event, photo)}
+                  disabled={!photo.has_web}
+                  title={photo.has_web ? 'Toggle Web/Original' : 'Web version not available'}
+                >
+                  {showingWeb ? <Monitor size={16} /> : <FileImage size={16} />}
+                  {showingWeb ? 'Web' : 'Original'}
+                </button>
+
+                <img
+                  src={photosAPI.getFile(photo.id, false, showingWeb)}
+                  alt={photo.filename}
+                  className="card-image"
+                />
+
+                <div className="card-info">
+                  <div className="card-meta">
+                    <div className="filename">{photo.filename}</div>
+                    <div className="details">
+                      <span>{displayedDimensions.width || '?'} x {displayedDimensions.height || '?'}</span>
+                      <span>{formatFileSize(displayedSize)}</span>
+                    </div>
+                  </div>
+
+                  <div className="checkbox">
+                    <input
+                      type="checkbox"
+                      checked={selectedPhotos.includes(photo.id)}
+                      onChange={(event) => {
+                        event.stopPropagation();
+                        handleSelectPhoto(photo.id);
+                      }}
+                    />
+                  </div>
                 </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
 
@@ -240,8 +297,8 @@ function Compare() {
             Skip Group (S)
           </button>
 
-          <button 
-            className="btn btn-danger" 
+          <button
+            className="btn btn-danger"
             onClick={handleDeleteSelected}
             disabled={selectedPhotos.length === 0}
           >
@@ -249,8 +306,8 @@ function Compare() {
             Delete Selected ({selectedPhotos.length})
           </button>
 
-          <button 
-            className="btn btn-warning" 
+          <button
+            className="btn btn-warning"
             onClick={handleDeleteOthers}
             disabled={selectedPhotos.length === 0}
           >
@@ -258,8 +315,8 @@ function Compare() {
             Delete Others
           </button>
 
-          <button 
-            className="btn btn-secondary" 
+          <button
+            className="btn btn-secondary"
             onClick={() => setCurrentGroupIdx(Math.min(groups.length - 1, currentGroupIdx + 1))}
           >
             Next
@@ -269,9 +326,9 @@ function Compare() {
 
         <div className="keyboard-hints">
           <span>1-{currentGroup.photos.length} Select photo</span>
-          <span>← → Navigate groups</span>
+          <span>Left/Right Navigate groups</span>
           <span>S Skip</span>
-          <span>Delete/Delete others</span>
+          <span>Web/Original per photo card</span>
         </div>
       </div>
     </div>
@@ -279,4 +336,3 @@ function Compare() {
 }
 
 export default Compare;
-

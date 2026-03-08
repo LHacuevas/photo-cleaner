@@ -279,6 +279,110 @@ class ImageProcessor:
         return degrees + (minutes / 60.0) + (seconds / 3600.0)
     
     @staticmethod
+    def rotate_photo(image_path: Path, rotation: int = 90) -> bool:
+        """
+        Rotate photo in-place by specified degrees (90, 180, 270, -90)
+        
+        Args:
+            image_path: Path to image file
+            rotation: Degrees to rotate (positive = clockwise, negative = counter-clockwise)
+        
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            if not image_path.exists():
+                logger.error(f"Image not found: {image_path}")
+                return False
+            
+            # Open image and rotate
+            img = Image.open(image_path)
+            
+            # Handle EXIF orientation
+            try:
+                from PIL import ExifTags
+                exif = img._getexif()
+                if exif:
+                    # Correct rotation based on EXIF
+                    for tag, value in exif.items():
+                        if tag == 274:  # Orientation tag
+                            if value == 2:
+                                img = img.transpose(Image.FLIP_LEFT_RIGHT)
+                            elif value == 3:
+                                img = img.rotate(180, expand=True)
+                            elif value == 4:
+                                img = img.transpose(Image.FLIP_TOP_BOTTOM)
+                            elif value == 5:
+                                img = img.transpose(Image.ROTATE_270).transpose(Image.FLIP_LEFT_RIGHT)
+                            elif value == 6:
+                                img = img.rotate(270, expand=True)
+                            elif value == 7:
+                                img = img.transpose(Image.ROTATE_90).transpose(Image.FLIP_LEFT_RIGHT)
+                            elif value == 8:
+                                img = img.rotate(90, expand=True)
+            except Exception as e:
+                logger.warning(f"Could not process EXIF orientation: {e}")
+            
+            # Rotate image
+            if rotation == 90:
+                rotated = img.rotate(270, expand=True)  # PIL rotates counter-clockwise
+            elif rotation == -90:
+                rotated = img.rotate(90, expand=True)
+            elif rotation == 180:
+                rotated = img.rotate(180, expand=True)
+            elif rotation == 270:
+                rotated = img.rotate(90, expand=True)
+            else:
+                logger.error(f"Invalid rotation angle: {rotation}")
+                return False
+            
+            # Save back to same file
+            rotated.save(image_path, quality=95)
+            logger.info(f"Rotated {image_path.name} by {rotation}°")
+            
+            return True
+        
+        except Exception as e:
+            logger.error(f"Error rotating photo {image_path}: {e}")
+            return False
+    
+    @staticmethod
+    def flip_photo(image_path: Path, direction: str = 'horizontal') -> bool:
+        """
+        Flip photo (horizontal or vertical)
+        
+        Args:
+            image_path: Path to image file
+            direction: 'horizontal' or 'vertical'
+        
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            if not image_path.exists():
+                logger.error(f"Image not found: {image_path}")
+                return False
+            
+            img = Image.open(image_path)
+            
+            if direction == 'horizontal':
+                flipped = img.transpose(Image.FLIP_LEFT_RIGHT)
+            elif direction == 'vertical':
+                flipped = img.transpose(Image.FLIP_TOP_BOTTOM)
+            else:
+                logger.error(f"Invalid flip direction: {direction}")
+                return False
+            
+            flipped.save(image_path, quality=95)
+            logger.info(f"Flipped {image_path.name} ({direction})")
+            
+            return True
+        
+        except Exception as e:
+            logger.error(f"Error flipping photo {image_path}: {e}")
+            return False
+    
+    @staticmethod
     def compare_hashes(hash1: str, hash2: str) -> int:
         """
         Compare two perceptual hashes

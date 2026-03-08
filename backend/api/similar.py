@@ -18,6 +18,23 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _get_web_file_details(photo: Photo) -> dict:
+    web_path = Path(photo.filepath).parent / 'web' / Path(photo.filepath).name
+    if not web_path.exists():
+        return {
+            "web_size": None,
+            "web_width": None,
+            "web_height": None
+        }
+
+    web_info = ImageProcessor.get_image_info(web_path) or {}
+    return {
+        "web_size": web_info.get("size", web_path.stat().st_size),
+        "web_width": web_info.get("width"),
+        "web_height": web_info.get("height")
+    }
+
+
 class SimilarGroupResponse(BaseModel):
     id: int
     photo_count: int
@@ -292,9 +309,15 @@ async def get_group_details(group_id: int, db: Session = Depends(get_db)):
                     "width": p.width,
                     "height": p.height,
                     "size": p.size,
+                    "has_web": p.has_web,
                     "date_taken": p.date_taken.isoformat() if p.date_taken else None,
                     "is_favorite": p.is_favorite,
-                    "is_deleted": p.is_deleted
+                    "is_deleted": p.is_deleted,
+                    **(_get_web_file_details(p) if p.has_web else {
+                        "web_size": None,
+                        "web_width": None,
+                        "web_height": None
+                    })
                 }
                 for p in photos
             ]

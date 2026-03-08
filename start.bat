@@ -5,13 +5,11 @@ echo ========================================
 echo.
 
 REM Check if backend venv exists
-if not exist "backend\venv" (
+if not exist ".venv" (
     echo [1/4] Creating Python virtual environment...
-    cd backend
-    python -m venv venv
-    call venv\Scripts\activate
-    pip install -r requirements.txt
-    cd ..
+    python -m venv .venv
+    call .venv\Scripts\activate
+    pip install -r backend\requirements.txt
 ) else (
     echo [1/4] Virtual environment already exists ✓
 )
@@ -27,7 +25,7 @@ if not exist "frontend\node_modules" (
 )
 
 echo [3/4] Starting backend server...
-start "Photo Cleaner Backend" cmd /k "cd backend && venv\Scripts\activate && python main.py"
+start "Photo Cleaner Backend" cmd /k "call .venv\Scripts\activate && cd backend && python main.py"
 
 timeout /t 3 /nobreak >nul
 
@@ -38,7 +36,7 @@ echo.
 echo ========================================
 echo   Photo Cleaner is starting!
 echo   Backend:  http://localhost:8000
-echo   Frontend: http://localhost:3000
+echo   Frontend: http://localhost:3001
 echo ========================================
 echo.
 echo Press any key to exit this window...

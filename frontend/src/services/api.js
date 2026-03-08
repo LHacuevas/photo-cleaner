@@ -21,16 +21,30 @@ export const photosAPI = {
   list: (folderId, params = {}) => 
     api.get(`/photos/list/${folderId}`, { params }),
   get: (photoId) => api.get(`/photos/get/${photoId}`),
-  getFile: (photoId, thumb = false) => 
-    `${API_BASE_URL}/photos/file/${photoId}?thumb=${thumb}`,
+  getFile: (photoId, thumb = false, preferWeb = false) => {
+    const params = new URLSearchParams({ thumb: String(thumb) });
+    if (preferWeb) {
+      params.set('prefer_web', 'true');
+    }
+    return `${API_BASE_URL}/photos/file/${photoId}?${params.toString()}`;
+  },
   toggleFavorite: (photoId) => api.post(`/photos/favorite/${photoId}`),
   delete: (photoId) => api.post(`/photos/delete/${photoId}`),
   restore: (photoId) => api.post(`/photos/restore/${photoId}`),
   generateThumbs: (folderId) => api.post(`/photos/generate-thumbs/${folderId}`),
   generateWeb: (folderId, mode = 'web') => 
     api.post(`/photos/generate-web/${folderId}`, null, { params: { mode } }),
+  generateThumbsAsync: (folderId) => api.post(`/photos/generate-thumbs-async/${folderId}`),
+  generateWebAsync: (folderId, mode = 'web') => 
+    api.post(`/photos/generate-web-async/${folderId}`, null, { params: { mode } }),
   batchOperation: (operation, photoIds) =>
     api.post(`/photos/batch-operation`, { operation, photo_ids: photoIds }),
+  getTaskStatus: (taskId) => api.get(`/photos/tasks/${taskId}`),
+  listTasks: () => api.get(`/photos/tasks`),
+  rotate: (photoId, degrees = 90) => 
+    api.post(`/photos/rotate/${photoId}`, null, { params: { degrees } }),
+  flip: (photoId, direction = 'horizontal') => 
+    api.post(`/photos/flip/${photoId}`, null, { params: { direction } }),
 };
 
 // Similar photos API

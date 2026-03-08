@@ -1,0 +1,151 @@
+.batch-action-bar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  padding: 1rem 1.5rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 2rem;
+  box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.3);
+  animation: slideUp 0.3s ease-out;
+  z-index: 900;
+}
+
+@keyframes slideUp {
+  from {
+    transform: translateY(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.batch-info {
+  flex: 1;
+  max-width: 300px;
+}
+
+.batch-count {
+  font-weight: 600;
+  font-size: 1rem;
+}
+
+.batch-actions {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.batch-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.625rem 1.25rem;
+  background: rgba(255, 255, 255, 0.15);
+  color: white;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 6px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.batch-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.25);
+  border-color: rgba(255, 255, 255, 0.5);
+  transform: translateY(-2px);
+}
+
+.batch-btn:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.batch-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.batch-btn-favorite {
+  background: rgba(255, 215, 0, 0.2);
+  border-color: rgba(255, 215, 0, 0.4);
+}
+
+.batch-btn-favorite:hover:not(:disabled) {
+  background: rgba(255, 215, 0, 0.3);
+  border-color: rgba(255, 215, 0, 0.6);
+}
+
+.batch-btn-delete {
+  background: rgba(239, 68, 68, 0.2);
+  border-color: rgba(239, 68, 68, 0.4);
+}
+
+.batch-btn-delete:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.3);
+  border-color: rgba(239, 68, 68, 0.6);
+}
+
+.batch-btn-clear {
+  background: rgba(107, 114, 128, 0.2);
+  border-color: rgba(107, 114, 128, 0.4);
+}
+
+.batch-btn-clear:hover:not(:disabled) {
+  background: rgba(107, 114, 128, 0.3);
+  border-color: rgba(107, 114, 128, 0.6);
+}
+
+.batch-loading {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-weight: 500;
+}
+
+.batch-loading .spinner {
+  width: 20px;
+  height: 20px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: white;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .batch-action-bar {
+    flex-direction: column;
+    gap: 1rem;
+    padding: 0.75rem 1rem;
+  }
+
+  .batch-info {
+    max-width: 100%;
+  }
+
+  .batch-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .batch-btn {
+    flex: 1;
+    justify-content: center;
+  }
+
+  .batch-btn span {
+    display: none;
+  }
+}
