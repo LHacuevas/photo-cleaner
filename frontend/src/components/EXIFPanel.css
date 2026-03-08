@@ -1,0 +1,84 @@
+.exif-panel {
+  background: linear-gradient(135deg, #f5f5f5 0%, #ffffff 100%);
+  border-radius: 8px;
+  padding: 16px;
+  max-height: 600px;
+  overflow-y: auto;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.exif-panel h3 {
+  margin: 0 0 16px;
+  font-size: 18px;
+  font-weight: 600;
+  color: #333;
+  border-bottom: 2px solid #007bff;
+  padding-bottom: 8px;
+}
+
+.exif-section {
+  margin-bottom: 16px;
+}
+
+.exif-section h4 {
+  margin: 0 0 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #555;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.exif-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 6px 0;
+  font-size: 13px;
+  border-bottom: 1px solid #eee;
+  align-items: center;
+}
+
+.exif-row:last-child {
+  border-bottom: none;
+}
+
+.exif-row .label {
+  font-weight: 500;
+  color: #666;
+  flex: 0 0 auto;
+}
+
+.exif-row .value {
+  text-align: right;
+  color: #333;
+  word-break: break-word;
+  margin-left: 12px;
+  font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+  font-size: 12px;
+}
+
+.no-data {
+  color: #999;
+  font-size: 13px;
+  padding: 12px;
+  text-align: center;
+}
+
+/* Scrollbar styling */
+.exif-panel::-webkit-scrollbar {
+  width: 6px;
+}
+
+.exif-panel::-webkit-scrollbar-track {
+  background: #f1f1f1;
+  border-radius: 3px;
+}
+
+.exif-panel::-webkit-scrollbar-thumb {
+  background: #ccc;
+  border-radius: 3px;
+}
+
+.exif-panel::-webkit-scrollbar-thumb:hover {
+  background: #999;
+}
