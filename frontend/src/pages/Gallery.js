@@ -341,7 +341,7 @@ function Gallery() {
       setImageRevision((prev) => prev + 1);
     } catch (error) {
       console.error('Error rotating photo:', error);
-      alert('Error rotating photo');
+      alert(error.response?.data?.detail || 'Error rotating photo');
     } finally {
       setRotationLoading(false);
     }
@@ -361,7 +361,7 @@ function Gallery() {
       setImageRevision((prev) => prev + 1);
     } catch (error) {
       console.error('Error flipping photo:', error);
-      alert('Error flipping photo');
+      alert(error.response?.data?.detail || 'Error flipping photo');
     } finally {
       setRotationLoading(false);
     }

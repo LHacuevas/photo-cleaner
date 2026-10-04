@@ -155,6 +155,8 @@ async def scan_folder(folder: FolderCreate, db: Session = Depends(get_db)):
             "subfolders_created": True
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error scanning folder: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -206,6 +208,8 @@ async def get_folder_stats(folder_id: int, db: Session = Depends(get_db)):
             "has_web": web_count > 0
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error getting folder stats: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -229,6 +233,8 @@ async def list_folders(db: Session = Depends(get_db)):
         
         return result
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error listing folders: {e}")
         raise HTTPException(status_code=500, detail=str(e))

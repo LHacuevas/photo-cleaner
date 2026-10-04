@@ -19,16 +19,29 @@ function Compare() {
     loadGroups();
   }, [folderId]);
 
+  const fetchPendingGroups = async () => {
+    const groupsResponse = await similarAPI.getGroups(folderId, true);
+    const detailResponses = await Promise.all(
+      (groupsResponse.data.groups || []).map((group) => similarAPI.getGroup(group.id))
+    );
+    // Photos deleted from the gallery since grouping are no longer candidates
+    return detailResponses
+      .map((response) => ({
+        ...response.data,
+        photos: response.data.photos.filter((photo) => !photo.is_deleted)
+      }))
+      .filter((group) => group.photos.length > 1);
+  };
+
   const loadGroups = async () => {
     try {
       setLoading(true);
-      await similarAPI.analyze(folderId);
-      const groupsResponse = await similarAPI.getGroups(folderId, false);
-      const groupSummaries = groupsResponse.data.groups || [];
-      const detailResponses = await Promise.all(
-        groupSummaries.map((group) => similarAPI.getGroup(group.id))
-      );
-      const nextGroups = detailResponses.map((response) => response.data);
+      let nextGroups = await fetchPendingGroups();
+      if (nextGroups.length === 0) {
+        await similarAPI.analyze(folderId);
+        await similarAPI.group(folderId);
+        nextGroups = await fetchPendingGroups();
+      }
       setGroups(nextGroups);
       setCurrentGroupIdx(0);
       setSelectedPhotos([]);
@@ -118,6 +131,7 @@ function Compare() {
 
     try {
       await Promise.all(selectedPhotos.map((photoId) => photosAPI.delete(photoId)));
+      await similarAPI.skipGroup(currentGroup.id);
       moveToNextGroup();
     } catch (error) {
       console.error('Error deleting photos:', error);
@@ -141,6 +155,7 @@ function Compare() {
 
     try {
       await Promise.all(othersToDelete.map((photoId) => photosAPI.delete(photoId)));
+      await similarAPI.skipGroup(currentGroup.id);
       moveToNextGroup();
     } catch (error) {
       console.error('Error deleting photos:', error);

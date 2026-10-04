@@ -111,6 +111,8 @@ async def search_photos(filters: MetadataFilter, db: Session = Depends(get_db)):
             ]
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error searching photos: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -143,6 +145,8 @@ async def get_camera_list(folder_id: int, db: Session = Depends(get_db)):
             "cameras": result
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error getting camera list: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -168,6 +172,8 @@ async def get_date_range(folder_id: int, db: Session = Depends(get_db)):
             "photos_with_dates": len(photos_with_dates)
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error getting date range: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -207,6 +213,8 @@ async def get_metadata_stats(folder_id: int, db: Session = Depends(get_db)):
             "gps_coverage": (photos_with_gps / total_photos * 100) if total_photos > 0 else 0
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error getting metadata stats: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -252,6 +260,8 @@ async def get_photos_by_month(folder_id: int, db: Session = Depends(get_db)):
             "months": result
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error grouping photos by month: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -284,6 +294,8 @@ async def get_gps_locations(folder_id: int, db: Session = Depends(get_db)):
             "locations": locations
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error getting GPS locations: {e}")
         raise HTTPException(status_code=500, detail=str(e))

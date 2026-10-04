@@ -7,13 +7,58 @@ import subprocess
 import shutil
 from pathlib import Path
 from typing import Tuple, Optional
-from PIL import Image
+from PIL import Image, ImageOps
 import imagehash
 import piexif
 import logging
+import io
+import os
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
+
+# User-facing rotations (clockwise degrees) and flips, as Pillow transpose operations
+ROTATIONS = {
+    90: Image.Transpose.ROTATE_270,
+    -90: Image.Transpose.ROTATE_90,
+    180: Image.Transpose.ROTATE_180,
+    270: Image.Transpose.ROTATE_90,
+}
+FLIPS = {
+    'horizontal': Image.Transpose.FLIP_LEFT_RIGHT,
+    'vertical': Image.Transpose.FLIP_TOP_BOTTOM,
+}
+
+# Transpose needed to display pixels stored with each EXIF orientation (as ImageOps.exif_transpose)
+_ORIENTATION_TRANSPOSE = {
+    1: None,
+    2: Image.Transpose.FLIP_LEFT_RIGHT,
+    3: Image.Transpose.ROTATE_180,
+    4: Image.Transpose.FLIP_TOP_BOTTOM,
+    5: Image.Transpose.TRANSPOSE,
+    6: Image.Transpose.ROTATE_270,
+    7: Image.Transpose.TRANSVERSE,
+    8: Image.Transpose.ROTATE_90,
+}
+
+
+def _compose_orientation(orientation: int, op: Image.Transpose) -> int:
+    """
+    EXIF orientation that displays the image as `orientation` followed by `op`.
+    Found by applying both to a tiny asymmetric probe image and matching the result.
+    """
+    probe = Image.frombytes('L', (3, 2), bytes(range(6)))
+
+    def displayed(o):
+        transpose = _ORIENTATION_TRANSPOSE[o]
+        return probe.transpose(transpose) if transpose is not None else probe
+
+    target = displayed(orientation).transpose(op)
+    for candidate in _ORIENTATION_TRANSPOSE:
+        shown = displayed(candidate)
+        if shown.size == target.size and shown.tobytes() == target.tobytes():
+            return candidate
+    raise ValueError(f"No EXIF orientation for {orientation} + {op}")
 
 
 class ImageProcessor:
@@ -279,109 +324,47 @@ class ImageProcessor:
         return degrees + (minutes / 60.0) + (seconds / 3600.0)
     
     @staticmethod
-    def rotate_photo(image_path: Path, rotation: int = 90) -> bool:
+    def transform_original(image_path: Path, op: Image.Transpose) -> bool:
         """
-        Rotate photo in-place by specified degrees (90, 180, 270, -90)
-        
-        Args:
-            image_path: Path to image file
-            rotation: Degrees to rotate (positive = clockwise, negative = counter-clockwise)
-        
-        Returns:
-            True if successful, False otherwise
+        Rotate/flip a JPEG original losslessly: only its EXIF Orientation tag is
+        rewritten, pixels and the rest of the metadata are left untouched.
         """
         try:
-            if not image_path.exists():
-                logger.error(f"Image not found: {image_path}")
-                return False
-            
-            # Open image and rotate
-            img = Image.open(image_path)
-            
-            # Handle EXIF orientation
-            try:
-                from PIL import ExifTags
-                exif = img._getexif()
-                if exif:
-                    # Correct rotation based on EXIF
-                    for tag, value in exif.items():
-                        if tag == 274:  # Orientation tag
-                            if value == 2:
-                                img = img.transpose(Image.FLIP_LEFT_RIGHT)
-                            elif value == 3:
-                                img = img.rotate(180, expand=True)
-                            elif value == 4:
-                                img = img.transpose(Image.FLIP_TOP_BOTTOM)
-                            elif value == 5:
-                                img = img.transpose(Image.ROTATE_270).transpose(Image.FLIP_LEFT_RIGHT)
-                            elif value == 6:
-                                img = img.rotate(270, expand=True)
-                            elif value == 7:
-                                img = img.transpose(Image.ROTATE_90).transpose(Image.FLIP_LEFT_RIGHT)
-                            elif value == 8:
-                                img = img.rotate(90, expand=True)
-            except Exception as e:
-                logger.warning(f"Could not process EXIF orientation: {e}")
-            
-            # Rotate image
-            if rotation == 90:
-                rotated = img.rotate(270, expand=True)  # PIL rotates counter-clockwise
-            elif rotation == -90:
-                rotated = img.rotate(90, expand=True)
-            elif rotation == 180:
-                rotated = img.rotate(180, expand=True)
-            elif rotation == 270:
-                rotated = img.rotate(90, expand=True)
-            else:
-                logger.error(f"Invalid rotation angle: {rotation}")
-                return False
-            
-            # Save back to same file
-            rotated.save(image_path, quality=95)
-            logger.info(f"Rotated {image_path.name} by {rotation}°")
-            
+            data = image_path.read_bytes()
+            exif_dict = piexif.load(data)
+            current = exif_dict['0th'].get(piexif.ImageIFD.Orientation, 1)
+            if current not in _ORIENTATION_TRANSPOSE:
+                current = 1
+            exif_dict['0th'][piexif.ImageIFD.Orientation] = _compose_orientation(current, op)
+
+            output = io.BytesIO()
+            piexif.insert(piexif.dump(exif_dict), data, output)
+
+            # Write to a temp file first so a failure never leaves a truncated original
+            tmp_path = image_path.with_name(image_path.name + '.tmp')
+            tmp_path.write_bytes(output.getvalue())
+            os.replace(tmp_path, image_path)
+
+            logger.info(f"Updated EXIF orientation of {image_path.name}")
             return True
-        
+
         except Exception as e:
-            logger.error(f"Error rotating photo {image_path}: {e}")
+            logger.error(f"Error updating orientation of {image_path}: {e}")
             return False
-    
+
     @staticmethod
-    def flip_photo(image_path: Path, direction: str = 'horizontal') -> bool:
-        """
-        Flip photo (horizontal or vertical)
-        
-        Args:
-            image_path: Path to image file
-            direction: 'horizontal' or 'vertical'
-        
-        Returns:
-            True if successful, False otherwise
-        """
+    def transform_derivative(image_path: Path, op: Image.Transpose) -> bool:
+        """Rotate/flip a generated thumb/web version by re-encoding its pixels"""
         try:
-            if not image_path.exists():
-                logger.error(f"Image not found: {image_path}")
-                return False
-            
-            img = Image.open(image_path)
-            
-            if direction == 'horizontal':
-                flipped = img.transpose(Image.FLIP_LEFT_RIGHT)
-            elif direction == 'vertical':
-                flipped = img.transpose(Image.FLIP_TOP_BOTTOM)
-            else:
-                logger.error(f"Invalid flip direction: {direction}")
-                return False
-            
-            flipped.save(image_path, quality=95)
-            logger.info(f"Flipped {image_path.name} ({direction})")
-            
+            with Image.open(image_path) as img:
+                transformed = ImageOps.exif_transpose(img).transpose(op)
+            transformed.save(image_path, quality=90)
             return True
-        
+
         except Exception as e:
-            logger.error(f"Error flipping photo {image_path}: {e}")
+            logger.error(f"Error transforming {image_path}: {e}")
             return False
-    
+
     @staticmethod
     def compare_hashes(hash1: str, hash2: str) -> int:
         """

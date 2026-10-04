@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import List, Optional
 import uvicorn
 import logging
+import os
 
 from api import photos, folders, metadata, similar
 from database import init_db
@@ -101,7 +102,8 @@ async def health_check():
 if __name__ == "__main__":
     uvicorn.run(
         "main:app",
-        host="0.0.0.0",
+        # Local only by default: the API reads any folder on disk. Set PHOTO_CLEANER_HOST=0.0.0.0 to expose it on the LAN.
+        host=os.getenv("PHOTO_CLEANER_HOST", "127.0.0.1"),
         port=8000,
         reload=True,
         log_level="info"

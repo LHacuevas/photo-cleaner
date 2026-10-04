@@ -3,14 +3,16 @@ Similar Photos API - Detect duplicates and similar photos using perceptual hashi
 """
 
 from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 from pathlib import Path
 from typing import List, Dict
 import logging
 from collections import defaultdict
 
-from database import get_db, Photo, SimilarGroup, PhotoSimilarGroup, Folder
+from database import get_db, SessionLocal, Photo, SimilarGroup, PhotoSimilarGroup
 from utils.image_processing import ImageProcessor
+from utils.photo_files import move_photo_variants
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -65,8 +67,9 @@ async def analyze_similar_photos(
         if not photos:
             return {"message": "All photos already analyzed"}
         
-        # Add background task to compute hashes
-        background_tasks.add_task(compute_photo_hashes, photos, db)
+        # Add background task to compute hashes (the request's session is closed by then,
+        # so the task only gets IDs and opens its own)
+        background_tasks.add_task(compute_photo_hashes, [p.id for p in photos])
         
         return {
             "status": "started",
@@ -74,15 +77,24 @@ async def analyze_similar_photos(
             "message": "Analysis started in background"
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error starting analysis: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-async def compute_photo_hashes(photos: List[Photo], db: Session):
-    """Background task to compute hashes for photos"""
+def compute_photo_hashes(photo_ids: List[int]):
+    """Background task to compute hashes for photos (sync, so it runs in the threadpool)"""
     processor = ImageProcessor()
-    
+    db = SessionLocal()
+    try:
+        _compute_photo_hashes(db.query(Photo).filter(Photo.id.in_(photo_ids)).all(), db, processor)
+    finally:
+        db.close()
+
+
+def _compute_photo_hashes(photos: List[Photo], db: Session, processor: ImageProcessor):
     for photo in photos:
         try:
             hashes = processor.compute_hashes(Path(photo.filepath))
@@ -138,11 +150,36 @@ async def group_similar_photos(
         11-15: Similar
     """
     try:
+        # Re-grouping replaces the pending (unreviewed) groups instead of piling up duplicates
+        pending_group_ids = [
+            group_id for (group_id,) in db.query(SimilarGroup.id).filter(
+                SimilarGroup.folder_id == folder_id,
+                SimilarGroup.is_reviewed == False
+            )
+        ]
+        if pending_group_ids:
+            db.query(PhotoSimilarGroup).filter(
+                PhotoSimilarGroup.group_id.in_(pending_group_ids)
+            ).delete(synchronize_session=False)
+            db.query(SimilarGroup).filter(
+                SimilarGroup.id.in_(pending_group_ids)
+            ).delete(synchronize_session=False)
+            db.commit()
+
+        # Photos already reviewed in a group are not proposed again
+        reviewed_photo_ids = select(PhotoSimilarGroup.photo_id).join(
+            SimilarGroup, SimilarGroup.id == PhotoSimilarGroup.group_id
+        ).where(
+            SimilarGroup.folder_id == folder_id,
+            SimilarGroup.is_reviewed == True
+        )
+
         # Get all photos with hashes
         photos = db.query(Photo).filter(
             Photo.folder_id == folder_id,
             Photo.is_deleted == False,
-            Photo.phash != None
+            Photo.phash != None,
+            Photo.id.not_in(reviewed_photo_ids)
         ).all()
         
         if len(photos) < 2:
@@ -230,6 +267,8 @@ async def group_similar_photos(
             "groups": saved_groups
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error grouping similar photos: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -273,6 +312,8 @@ async def get_similar_groups(
             "groups": result
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error getting similar groups: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -323,6 +364,8 @@ async def get_group_details(group_id: int, db: Session = Depends(get_db)):
             ]
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error getting group details: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -345,41 +388,41 @@ async def select_best_photo(
         if not group:
             raise HTTPException(status_code=404, detail="Group not found")
         
+        group_photo_ids = [
+            pid for (pid,) in db.query(PhotoSimilarGroup.photo_id).filter(
+                PhotoSimilarGroup.group_id == group_id
+            )
+        ]
+        if photo_id not in group_photo_ids:
+            raise HTTPException(status_code=400, detail="Photo does not belong to this group")
+        
         # Mark group as reviewed and set selected photo
         group.is_reviewed = True
         group.selected_photo_id = photo_id
         
+        deleted_count = 0
         if delete_others:
-            # Get all photos in group except selected one
-            photo_ids = db.query(PhotoSimilarGroup.photo_id).filter(
-                PhotoSimilarGroup.group_id == group_id,
-                PhotoSimilarGroup.photo_id != photo_id
+            photos_to_delete = db.query(Photo).filter(
+                Photo.id.in_(group_photo_ids),
+                Photo.id != photo_id,
+                Photo.is_deleted == False
             ).all()
-            photo_ids = [pid[0] for pid in photo_ids]
             
-            # Mark them as deleted
-            photos_to_delete = db.query(Photo).filter(Photo.id.in_(photo_ids)).all()
-            
+            # Same non-destructive move as the regular delete (original + thumbs/web/preferite)
             for photo in photos_to_delete:
-                photo.is_deleted = True
-                
-                # Move to cancellate folder
-                original_path = Path(photo.filepath)
-                deleted_path = original_path.parent / 'cancellate' / original_path.name
-                
-                if original_path.exists():
-                    import shutil
-                    shutil.move(str(original_path), str(deleted_path))
-                    photo.filepath = str(deleted_path)
+                move_photo_variants(photo, True)
+                deleted_count += 1
         
         db.commit()
         
         return {
             "group_id": group_id,
             "selected_photo_id": photo_id,
-            "deleted_count": len(photo_ids) if delete_others else 0
+            "deleted_count": deleted_count
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error selecting best photo: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -402,6 +445,8 @@ async def skip_group(group_id: int, db: Session = Depends(get_db)):
             "is_reviewed": True
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error skipping group: {e}")
         raise HTTPException(status_code=500, detail=str(e))
