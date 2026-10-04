@@ -67,6 +67,10 @@ function KeyboardShortcuts() {
                 <span>Switch original / web version</span>
               </div>
               <div className="shortcut-item">
+                <kbd>M</kbd>
+                <span>Show photo on the map</span>
+              </div>
+              <div className="shortcut-item">
                 <kbd>Ctrl+Click</kbd>
                 <span>Select thumbnails for batch actions</span>
               </div>

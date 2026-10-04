@@ -390,3 +390,52 @@
 .gallery-page .batch-action-bar {
   bottom: 97px;
 }
+
+/* Active position filter (from the map or "Nearby photos") */
+.gallery-filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.4rem 0.9rem;
+  background: rgba(245, 158, 11, 0.12);
+  border-bottom: 1px solid rgba(245, 158, 11, 0.35);
+  color: #fcd34d;
+  font-size: 0.85rem;
+}
+
+.gallery-filter-bar .btn {
+  padding: 0.3rem 0.7rem;
+  font-size: 0.8rem;
+}
+
+.gallery-filter-bar .btn:first-of-type {
+  margin-left: auto;
+}
+
+.gallery-filter-bar select {
+  background: #2d2d2d;
+  color: #fff;
+  border: 1px solid #555;
+  border-radius: 6px;
+  padding: 0.15rem 0.3rem;
+}
+
+.photo-map-actions {
+  display: flex;
+  gap: 0.4rem;
+  margin-top: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.photo-map-actions .btn {
+  padding: 0.35rem 0.6rem;
+  font-size: 0.78rem;
+}
+
+/* An active view filter (e.g. "Favorites"): outlined, so it doesn't look like the
+   filled star that marks the current photo as favorite */
+.gallery-actions .btn.btn-filter-active {
+  background: rgba(245, 158, 11, 0.12);
+  border-color: #f59e0b;
+  color: #fcd34d;
+}

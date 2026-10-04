@@ -12,8 +12,9 @@ Photo Cleaner indexa una carpeta de fotos, genera miniaturas y versiones web, de
 - 🗑️ **Borrado no destructivo:** el original y sus versiones se mueven a `cancellate/`, y se pueden deshacer.
 - 🔄 **Rotar y voltear sin pérdida:** en JPEG solo cambia la etiqueta EXIF de orientación; en PNG, BMP, TIFF, GIF y WebP sin pérdida se conservan los píxeles exactos.
 - 🖼️ **Formatos:** JPG, PNG, GIF, BMP, TIFF, WebP, HEIC/HEIF y RAW (CR2, CR3, NEF, ARW, DNG, ORF, RW2, RAF).
-- 📊 **Metadatos:** fecha, cámara, objetivo, ajustes de exposición y GPS, con mapa.
-- 💾 **100 % local:** el backend solo escucha en `127.0.0.1` por defecto.
+- 🗺️ **Mapa y búsqueda por posición:** todas las fotos con GPS en un mapa con *clusters*; selecciona una zona, busca un lugar por su nombre o pide las «fotos cercanas» a una dada.
+- 📊 **Metadatos:** fecha, cámara, objetivo, ajustes de exposición y GPS.
+- 💾 **Local:** el backend solo escucha en `127.0.0.1` por defecto. Solo salen a internet los fondos de mapa y las búsquedas de lugares (OpenStreetMap).
 
 ## Requisitos
 
@@ -58,6 +59,7 @@ Los nombres `cancellate` (descartadas) y `preferite` (favoritas) se mantienen en
 | `D` / `Supr` | Descartar (mover a `cancellate/`) |
 | `R` / `H` | Rotar 90° / voltear horizontalmente |
 | `V` | Alternar original / versión web |
+| `M` | Ver la foto en el mapa |
 | `Ctrl+clic` | Seleccionar miniaturas para acciones por lotes |
 | `?` | Ayuda de atajos |
 

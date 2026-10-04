@@ -6,6 +6,7 @@ SQLite database for storing photo metadata, hashes, and relationships
 from sqlalchemy import create_engine, event, inspect, Column, Integer, String, Float, DateTime, Boolean, ForeignKey
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 from datetime import datetime, timezone
+import math
 
 from alembic import command
 from alembic.config import Config
@@ -134,6 +135,21 @@ def _configure_sqlite(dbapi_connection, connection_record):
     cursor.execute("PRAGMA journal_mode=WAL")
     cursor.execute("PRAGMA busy_timeout=5000")
     cursor.close()
+    dbapi_connection.create_function("distance_km", 4, distance_km, deterministic=True)
+
+
+EARTH_RADIUS_KM = 6371.0
+
+
+def distance_km(lat1, lon1, lat2, lon2):
+    """Great-circle (haversine) distance in km; also available in SQL as distance_km()"""
+    if None in (lat1, lon1, lat2, lon2):
+        return None
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    d_phi = phi2 - phi1
+    d_lambda = math.radians(lon2 - lon1)
+    a = math.sin(d_phi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(d_lambda / 2) ** 2
+    return 2 * EARTH_RADIUS_KM * math.asin(min(1.0, math.sqrt(a)))
 
 
 SessionLocal = sessionmaker(autoflush=False, bind=engine)

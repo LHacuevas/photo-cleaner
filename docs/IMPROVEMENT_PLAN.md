@@ -72,7 +72,10 @@ Al escribir la guía de usuario y la especificación técnica, dos agentes leyer
 
 - [ ] Vista de papelera: ver y restaurar lo que hay en `cancellate/` (la API ya admite `only_deleted`); quitar un proyecto de la lista.
 - [ ] Comparar no usa `POST /similar/group/{id}/select/{photo_id}`, así que no guarda `selected_photo_id`.
-- [ ] Endpoints de metadatos (búsqueda, mapa, por mes) y cancelación de tareas sin interfaz.
+- [x] Mapa de fotos y búsqueda por posición (2026-10-04): pantalla **Map** con *clusters* (Leaflet), selección de zona → galería filtrada, «Nearby photos» con radio, búsqueda de lugares (proxy a Nominatim) y filtros `min/max_lat/lon` y `near_lat/near_lon/radius_km` en `/api/photos/list` (función SQL `distance_km`).
+- [x] Filtro «solo favoritas» en la galería (botón **Favorites**, `?favorites=1`, combinable con los filtros de posición).
+- [x] Fechas de archivo conservadas: versiones web y copias favoritas heredan las del original (también la de creación en Windows) y rotar ya no las cambia (antes las ponía en el día de hoy).
+- [ ] Endpoints de metadatos (búsqueda por cámara/fecha, por mes) y cancelación de tareas sin interfaz.
 - [ ] Columnas `folders.favorites_count/deleted_count` sin uso (los recuentos se calculan al vuelo): eliminarlas con una migración.
 - [ ] Fotos cuyo análisis falla se reintentan en cada análisis: marcarlas para no repetir.
 - [ ] Cancelar un análisis permite lanzar otro de la misma carpeta antes de que el primero se detenga.
@@ -81,7 +84,7 @@ Al escribir la guía de usuario y la especificación técnica, dos agentes leyer
 
 - [x] pytest del ciclo de archivos (borrar, restaurar, favorito, rotar) comprobando que el original no cambia (hash/píxeles).
 - [x] Tests de escaneo y agrupado con imágenes sintéticas (incluye equivalencia del agrupado vectorizado con el original).
-- [x] Tests de endpoints con `TestClient` (135 tests; `cd backend && pytest`, dependencias en `requirements-dev.txt`).
+- [x] Tests de endpoints con `TestClient` (157 tests; `cd backend && pytest`, dependencias en `requirements-dev.txt`).
 - [ ] GitHub Actions: ruff + pytest + build del frontend.
 
 ## Fase 5 — Funcionalidades

@@ -13,7 +13,7 @@ import uvicorn
 import logging
 
 import config
-from api import photos, folders, metadata, similar
+from api import photos, folders, metadata, similar, geo
 from database import init_db, engine
 from middleware import (
     global_exception_handler,
@@ -69,6 +69,7 @@ app.include_router(photos.router, prefix="/api/photos", tags=["photos"])
 app.include_router(folders.router, prefix="/api/folders", tags=["folders"])
 app.include_router(metadata.router, prefix="/api/metadata", tags=["metadata"])
 app.include_router(similar.router, prefix="/api/similar", tags=["similar"])
+app.include_router(geo.router, prefix="/api/geo", tags=["geo"])
 
 
 @app.get("/")

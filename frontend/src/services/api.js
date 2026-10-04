@@ -77,3 +77,8 @@ export function apiErrorMessage(error, fallback) {
   const data = error?.response?.data;
   return (typeof data?.detail === 'string' && data.detail) || data?.message || fallback;
 }
+
+// Place name search (proxied by the backend to OpenStreetMap Nominatim)
+export const geoAPI = {
+  searchPlaces: (query) => api.get('/geo/search', { params: { q: query } }),
+};

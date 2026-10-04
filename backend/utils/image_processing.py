@@ -21,6 +21,7 @@ import os
 from datetime import datetime
 
 import config
+from utils.file_times import apply_file_times, copy_file_times
 
 pillow_heif.register_heif_opener()
 
@@ -310,6 +311,7 @@ class ImageProcessor:
                     piexif.insert(exif, str(output_path))
             
             if created:
+                copy_file_times(input_path, output_path)
                 logger.info(f"Web version created: {output_path.name} ({mode})")
             return created
                 
@@ -517,6 +519,7 @@ class ImageProcessor:
         rewritten, pixels and the rest of the metadata are left untouched.
         """
         try:
+            original_times = image_path.stat()
             data = image_path.read_bytes()
             exif_dict = piexif.load(data)
             current = exif_dict['0th'].get(piexif.ImageIFD.Orientation, 1)
@@ -531,6 +534,7 @@ class ImageProcessor:
             tmp_path = image_path.with_name(image_path.name + '.tmp')
             tmp_path.write_bytes(output.getvalue())
             os.replace(tmp_path, image_path)
+            apply_file_times(image_path, original_times)  # still the same photo
 
             logger.info(f"Updated EXIF orientation of {image_path.name}")
             return True
@@ -565,6 +569,7 @@ class ImageProcessor:
         pixels in the same format, keeping ICC profile, EXIF, DPI and PNG text chunks.
         """
         try:
+            original_times = image_path.stat()
             with Image.open(image_path) as img:
                 image_format = img.format
                 upright = ImageOps.exif_transpose(img)  # bake any EXIF orientation into the pixels
@@ -590,6 +595,7 @@ class ImageProcessor:
             tmp_path = image_path.with_name(image_path.name + '.tmp')
             transformed.save(tmp_path, format=image_format, **params)
             os.replace(tmp_path, image_path)
+            apply_file_times(image_path, original_times)  # still the same photo
 
             logger.info(f"Transformed {image_path.name} losslessly ({image_format})")
             return True

@@ -1,15 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
   ArrowLeft,
   FileImage,
   FlipHorizontal2,
   Loader,
+  Map as MapIcon,
+  MapPin,
   Monitor,
   RotateCw,
   Search,
   Star,
-  Trash2
+  Trash2,
+  X
 } from 'lucide-react';
 import { apiErrorMessage, foldersAPI, photosAPI } from '../services/api';
 import BatchActionBar from '../components/BatchActionBar';
@@ -18,6 +21,7 @@ import ProgressBar from '../components/ProgressBar';
 import ThumbnailStrip from '../components/ThumbnailStrip';
 import { useToast } from '../components/Toast';
 import useBackgroundTask from '../hooks/useBackgroundTask';
+import { NEARBY_RADII_KM, readPositionFilter, toQueryString } from '../utils/geo';
 import './Gallery.css';
 
 const PAGE_SIZE = 2000;
@@ -27,6 +31,16 @@ function Gallery() {
   const { folderId } = useParams();
   const navigate = useNavigate();
   const toast = useToast();
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  // Optional position filter (from the map or "Nearby photos") and photo to open (?photo=ID)
+  const positionFilter = readPositionFilter(searchParams);
+  const favoritesOnly = searchParams.get('favorites') === '1';
+  const filterQuery = toQueryString({
+    ...(positionFilter?.params || {}),
+    only_favorites: favoritesOnly ? 'true' : null
+  });
+  const focusId = Number(searchParams.get('photo')) || null;
 
   const [photos, setPhotos] = useState([]);
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -41,6 +55,7 @@ function Gallery() {
   const [deleteNotice, setDeleteNotice] = useState(null);
   const [photoDetails, setPhotoDetails] = useState(null);
   const loadRequestRef = useRef(0);
+  const appliedFocusRef = useRef(null);
 
   const {
     taskId,
@@ -72,9 +87,10 @@ function Gallery() {
       setLoading(true);
       let loaded = [];
       let total = null;
+      const filterParams = Object.fromEntries(new URLSearchParams(filterQuery));
 
       while (total === null || loaded.length < total) {
-        const response = await photosAPI.list(folderId, { skip: loaded.length, limit: PAGE_SIZE });
+        const response = await photosAPI.list(folderId, { ...filterParams, skip: loaded.length, limit: PAGE_SIZE });
         if (requestId !== loadRequestRef.current) {
           return; // a newer load has started
         }
@@ -103,7 +119,7 @@ function Gallery() {
         setLoading(false);
       }
     }
-  }, [folderId, toast]);
+  }, [folderId, filterQuery, toast]);
 
   const loadFolderStats = useCallback(async () => {
     try {
@@ -115,9 +131,23 @@ function Gallery() {
   }, [folderId]);
 
   useEffect(() => {
+    setCurrentIndex(0); // a different folder or filter is a different list
     loadPhotos({ progressive: true });
     loadFolderStats();
   }, [loadPhotos, loadFolderStats]);
+
+  // Jump to ?photo=ID once it has been loaded
+  useEffect(() => {
+    const focusKey = `${filterQuery}|${focusId}`;
+    if (!focusId || appliedFocusRef.current === focusKey) {
+      return;
+    }
+    const index = photos.findIndex((photo) => photo.id === focusId);
+    if (index >= 0) {
+      setCurrentIndex(index);
+      appliedFocusRef.current = focusKey;
+    }
+  }, [photos, focusId, filterQuery]);
 
   useEffect(() => {
     if (!currentSummary?.id) {
@@ -258,6 +288,13 @@ function Gallery() {
     try {
       const photo = photos[currentIndex];
       const response = await photosAPI.toggleFavorite(photo.id);
+      if (favoritesOnly && !response.data.is_favorite) {
+        // No longer matches the "favorites only" view
+        const updated = photos.filter((item) => item.id !== photo.id);
+        setPhotos(updated);
+        setCurrentIndex((prev) => Math.min(prev, Math.max(0, updated.length - 1)));
+        return;
+      }
       setPhotos((prev) => prev.map((item) => (
         item.id === photo.id ? { ...item, is_favorite: response.data.is_favorite } : item
       )));
@@ -329,6 +366,43 @@ function Gallery() {
     setShowWebVersion((prev) => !prev);
   };
 
+  const hasLocation = currentPhoto?.gps_latitude != null && currentPhoto?.gps_longitude != null;
+
+  const handleShowOnMap = () => {
+    navigate(hasLocation ? `/map/${folderId}?focus=${currentPhoto.id}` : `/map/${folderId}`);
+  };
+
+  const showNearby = (latitude, longitude, radiusKm, photoId) => {
+    navigate(`/gallery/${folderId}?${toQueryString({
+      near_lat: latitude,
+      near_lon: longitude,
+      radius_km: radiusKm,
+      photo: photoId,
+      favorites: favoritesOnly ? 1 : null
+    })}`);
+  };
+
+  const handleShowNearby = () => {
+    if (hasLocation) {
+      showNearby(currentPhoto.gps_latitude, currentPhoto.gps_longitude, 1, currentPhoto.id);
+    }
+  };
+
+  const handleToggleFavoritesOnly = () => {
+    const next = new URLSearchParams(searchParams);
+    if (favoritesOnly) {
+      next.delete('favorites');
+    } else {
+      next.set('favorites', '1');
+    }
+    setSearchParams(next);
+  };
+
+  const handleChangeRadius = (radiusKm) => {
+    const { near_lat: latitude, near_lon: longitude } = positionFilter.params;
+    showNearby(latitude, longitude, radiusKm, currentPhoto?.id);
+  };
+
   // The listener is registered once and always calls the latest handlers
   const keyHandlersRef = useRef(null);
   keyHandlersRef.current = {
@@ -339,7 +413,8 @@ function Gallery() {
     Delete: handleDelete,
     h: () => handleFlip('horizontal'),
     r: () => handleRotate(90),
-    v: handleToggleImageVersion
+    v: handleToggleImageVersion,
+    m: handleShowOnMap
   };
 
   useEffect(() => {
@@ -368,10 +443,25 @@ function Gallery() {
     return (
       <div className="gallery-empty">
         <h2>No Photos Found</h2>
-        <p>This folder does not contain any photos yet.</p>
-        <button className="btn btn-primary" onClick={() => navigate('/')}>
-          Back to Home
-        </button>
+        {positionFilter || favoritesOnly ? (
+          <>
+            <p>
+              {favoritesOnly && !positionFilter
+                ? 'No favorites yet: mark photos with the star (F).'
+                : 'No photos match this filter.'}
+            </p>
+            <button className="btn btn-primary" onClick={() => navigate(`/gallery/${folderId}`)}>
+              Show all photos
+            </button>
+          </>
+        ) : (
+          <>
+            <p>This folder does not contain any photos yet.</p>
+            <button className="btn btn-primary" onClick={() => navigate('/')}>
+              Back to Home
+            </button>
+          </>
+        )}
       </div>
     );
   }
@@ -419,6 +509,24 @@ function Gallery() {
           >
             <Search size={20} />
             Find Duplicates
+          </button>
+
+          <button
+            className="btn btn-primary"
+            onClick={handleShowOnMap}
+            title="Photo map (M)"
+          >
+            <MapIcon size={20} />
+            Map
+          </button>
+
+          <button
+            className={`btn btn-secondary ${favoritesOnly ? 'btn-filter-active' : ''}`}
+            onClick={handleToggleFavoritesOnly}
+            title={favoritesOnly ? 'Show all photos' : 'Show only favorites'}
+          >
+            <Star size={20} fill={favoritesOnly ? 'currentColor' : 'none'} />
+            Favorites
           </button>
 
           <button
@@ -489,6 +597,42 @@ function Gallery() {
         </div>
       </div>
 
+      {(positionFilter || favoritesOnly) && (
+        <div className="gallery-filter-bar">
+          {positionFilter ? <MapPin size={16} /> : <Star size={16} fill="currentColor" />}
+          {!positionFilter && (
+            <span>Showing {photos.length} favorite photos</span>
+          )}
+          {positionFilter?.type === 'area' && (
+            <span>Showing {photos.length} {favoritesOnly ? 'favorite ' : ''}photos in the selected map area</span>
+          )}
+          {positionFilter?.type === 'near' && (
+            <span>
+              Showing {photos.length} {favoritesOnly ? 'favorite ' : ''}photos within{' '}
+              <select
+                value={positionFilter.params.radius_km}
+                onChange={(event) => handleChangeRadius(Number(event.target.value))}
+              >
+                {[...new Set([...NEARBY_RADII_KM, positionFilter.params.radius_km])]
+                  .sort((a, b) => a - b)
+                  .map((radius) => (
+                    <option key={radius} value={radius}>{radius} km</option>
+                  ))}
+              </select>
+            </span>
+          )}
+          {positionFilter?.type === 'area' && (
+            <button className="btn btn-secondary" onClick={() => navigate(`/map/${folderId}`)}>
+              Back to map
+            </button>
+          )}
+          <button className="btn btn-secondary" onClick={() => navigate(`/gallery/${folderId}`)} title="Show all photos">
+            <X size={16} />
+            Show all
+          </button>
+        </div>
+      )}
+
       <div className="gallery-content">
         <PhotoViewer
           photo={currentPhoto}
@@ -499,6 +643,8 @@ function Gallery() {
           deleteNotice={deleteNotice}
           onUndoDelete={handleUndoDelete}
           onDismissDeleteNotice={() => setDeleteNotice(null)}
+          onShowOnMap={handleShowOnMap}
+          onShowNearby={handleShowNearby}
         />
       </div>
 

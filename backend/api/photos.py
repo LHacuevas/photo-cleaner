@@ -4,6 +4,7 @@ Photos API - Get photos, navigate, mark favorites, delete
 
 from fastapi import APIRouter, HTTPException, Depends, Query
 from fastapi.responses import FileResponse, Response
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -121,6 +122,33 @@ class BatchOperationRequest(BaseModel):
     photo_ids: List[int]
 
 
+def _filter_by_position(query, min_lat, max_lat, min_lon, max_lon, near_lat, near_lon, radius_km):
+    area = (min_lat, max_lat, min_lon, max_lon)
+    near = (near_lat, near_lon, radius_km)
+
+    if any(value is not None for value in area):
+        if None in area:
+            raise HTTPException(status_code=400, detail="Area filter needs min_lat, max_lat, min_lon and max_lon")
+        if min_lat > max_lat:
+            raise HTTPException(status_code=400, detail="min_lat must not be greater than max_lat")
+        query = query.filter(Photo.gps_latitude.between(min_lat, max_lat))
+        if min_lon <= max_lon:
+            query = query.filter(Photo.gps_longitude.between(min_lon, max_lon))
+        else:
+            # The area crosses the antimeridian (e.g. 170 -> -170)
+            query = query.filter(or_(Photo.gps_longitude >= min_lon, Photo.gps_longitude <= max_lon))
+
+    if any(value is not None for value in near):
+        if None in near:
+            raise HTTPException(status_code=400, detail="Radius filter needs near_lat, near_lon and radius_km")
+        query = query.filter(
+            Photo.gps_latitude != None,
+            func.distance_km(Photo.gps_latitude, Photo.gps_longitude, near_lat, near_lon) <= radius_km
+        )
+
+    return query
+
+
 @router.get("/list/{folder_id}")
 def list_photos(
     folder_id: int,
@@ -128,14 +156,28 @@ def list_photos(
     limit: int = Query(100, ge=1, le=MAX_PAGE_SIZE),
     only_favorites: bool = False,
     only_deleted: bool = False,
+    min_lat: Optional[float] = Query(None, ge=-90, le=90),
+    max_lat: Optional[float] = Query(None, ge=-90, le=90),
+    min_lon: Optional[float] = Query(None, ge=-180, le=180),
+    max_lon: Optional[float] = Query(None, ge=-180, le=180),
+    near_lat: Optional[float] = Query(None, ge=-90, le=90),
+    near_lon: Optional[float] = Query(None, ge=-180, le=180),
+    radius_km: Optional[float] = Query(None, gt=0, le=20000),
     db: Session = Depends(get_db)
 ):
     """
     List photos in a folder with pagination.
     Returns summaries only; use /get/{photo_id} for metadata and web version details.
+
+    Position filters (only photos with GPS match them):
+    - area: min_lat, max_lat, min_lon, max_lon (min_lon > max_lon crosses the antimeridian)
+    - radius: near_lat, near_lon, radius_km
     """
     try:
         query = db.query(Photo).filter(Photo.folder_id == folder_id)
+        query = _filter_by_position(
+            query, min_lat, max_lat, min_lon, max_lon, near_lat, near_lon, radius_km
+        )
         
         if only_favorites:
             query = query.filter(Photo.is_favorite == True)

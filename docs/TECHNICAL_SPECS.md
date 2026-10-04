@@ -6,7 +6,7 @@ Documento de referencia para quien mantenga el código. Describe lo que hay en `
 
 | Capa | Tecnología |
 | --- | --- |
-| Frontend | React 18, Vite (servidor de desarrollo en el puerto 3000), React Router 7, axios, lucide-react |
+| Frontend | React 18, Vite (servidor de desarrollo en el puerto 3000), React Router 7, axios, lucide-react, Leaflet + react-leaflet 4 + leaflet.markercluster (cargados solo en la pantalla del mapa) |
 | Backend | FastAPI + uvicorn (Python 3.12 en el `.venv` del proyecto) |
 | Persistencia | SQLite mediante SQLAlchemy 2.1; migraciones con Alembic |
 | Imagen | FFmpeg (subproceso), Pillow, pillow-heif (HEIC), rawpy/LibRaw (RAW), piexif, imagehash, numpy |
@@ -110,6 +110,7 @@ Las fechas se guardan como `datetime` UTC *naive* (`utcnow()`).
 
 - `create_engine(DATABASE_URL, connect_args={"check_same_thread": False})`. En cada conexión se ejecutan `PRAGMA journal_mode=WAL`, para que la galería lea mientras las tareas escriben, y `PRAGMA busy_timeout=5000`, para esperar hasta 5 s en lugar de fallar con un bloqueo.
 - `SessionLocal = sessionmaker(autoflush=False)`. Los endpoints usan la dependencia `get_db()`; las tareas en segundo plano abren su propia sesión.
+- En cada conexión se registra la función SQL `distance_km(lat1, lon1, lat2, lon2)` (haversine, radio terrestre 6371 km; `NULL` si falta algún valor). La misma función está disponible en Python como `database.distance_km`.
 
 ### 3.5 Migraciones (Alembic)
 
@@ -142,7 +143,8 @@ Las fechas se guardan como `datetime` UTC *naive* (`utcnow()`).
 - Extensiones reconocidas (sin distinguir mayúsculas): `.jpg .jpeg .png .gif .bmp .tif .tiff .webp`, `.heic .heif` y `.cr2 .cr3 .nef .arw .dng .orf .rw2 .raf`.
 - El escaneo también **olvida** las fotos cuyo original ya no existe (ni en la raíz ni en `cancellate/`) y borra sus asociaciones con grupos. Solo registra los archivos que no están ya en la BD **en ninguna carpeta** (comparando `filepath` con `os.path.normcase`), de modo que escanear una carpeta padre en modo recursivo no duplica las fotos de una carpeta hija ya registrada: siguen perteneciendo a la hija. Si hubo fotos nuevas u olvidadas, borra los grupos pendientes de la carpeta (`clear_pending_groups`), actualiza `last_scanned` y deja el análisis en segundo plano.
 - **Borrar o restaurar** (`move_photo_variants`): mueve con `shutil.move` el original, la miniatura, la versión web y la copia de `preferite/` entre la raíz y `cancellate/`, crea las carpetas que falten, actualiza `is_deleted` y recalcula `filepath`, `has_thumb` y `has_web` (`refresh_photo_file_state`). La aplicación nunca borra archivos de forma definitiva.
-- **Favoritos** (`set_favorite`): al marcar, copia el original a `preferite/` con `shutil.copy2`; al desmarcar, borra esa copia. La usan tanto el endpoint individual como el de lotes.
+- **Favoritos** (`set_favorite`): al marcar, copia el original a `preferite/` con `shutil.copy2` y le aplica sus fechas con `copy_file_times` (en Windows `copy2` no conserva la de creación); al desmarcar, borra esa copia. La usan tanto el endpoint individual como el de lotes.
+- **Fechas de archivo** (`utils/file_times.py`): `apply_file_times(path, stat)` restaura acceso y modificación con `os.utime(ns=…)` y, en Windows, la creación (`st_birthtime_ns`) con `SetFileTime` vía `ctypes`, que `os.utime` no puede cambiar. Nunca lanza excepciones: si falla, deja un aviso en el log. Se usa en las versiones web (heredan las fechas del original), en las copias favoritas y al rotar o voltear (el original reescrito con `os.replace` conserva sus fechas). Las miniaturas mantienen su propia fecha de generación.
 - `get_web_file_details` devuelve `web_size`, `web_width` y `web_height` de la versión web, o `None` si no existe.
 
 ## 5. Procesado de imagen (`backend/utils/image_processing.py`)
@@ -261,7 +263,7 @@ Base `http://localhost:8000`. Todas las respuestas son JSON salvo `GET /api/phot
 
 | Método | Ruta | Parámetros / cuerpo | Respuesta | Códigos |
 | --- | --- | --- | --- | --- |
-| GET | `/list/{folder_id}` | `skip ≥ 0` (0), `limit` 1–5000 (100), `only_favorites`, `only_deleted` | `{total, skip, limit, photos: [{id, filename, is_favorite, is_deleted, has_thumb, has_web}]}`, ordenadas por `filename, id`. Solo lee la BD. | 422 si `limit` está fuera de rango |
+| GET | `/list/{folder_id}` | `skip ≥ 0` (0), `limit` 1–5000 (100), `only_favorites`, `only_deleted`; filtro de **zona** `min_lat`, `max_lat`, `min_lon`, `max_lon` (los cuatro; `min_lon > max_lon` = cruza el antimeridiano) o de **radio** `near_lat`, `near_lon`, `radius_km` (0 < r ≤ 20000, con `distance_km`) | `{total, skip, limit, photos: [{id, filename, is_favorite, is_deleted, has_thumb, has_web}]}`, ordenadas por `filename, id`. Solo lee la BD; `total` respeta los filtros. | 422 si un parámetro está fuera de rango; 400 si un filtro de posición está incompleto o `min_lat > max_lat` |
 | GET | `/get/{photo_id}` | — | Detalle completo: columnas de archivo, estado, EXIF y GPS (sin altitud), más `web_size/web_width/web_height`. Sincroniza `has_thumb/has_web` con el disco y lo guarda (commit). | 404 |
 | GET | `/file/{photo_id}` | `thumb` (false), `prefer_web` (false) | Archivo. `thumb=true`: la miniatura. Si no: la versión web si existe y (`prefer_web` o TIFF/HEIC/RAW); si no, el original; TIFF/HEIC/RAW sin versión web → `render_jpeg`. Los derivados de TIFF/HEIC/RAW se sirven como `image/jpeg` | 404 si falta la miniatura o el original |
 | POST | `/favorite/{photo_id}` | — | `{id, is_favorite}` (alterna) | 404 |
@@ -302,7 +304,15 @@ El frontend actual no usa estos endpoints. Salvo `/cameras` y `/search` con `onl
 | GET | `/date-range/{folder_id}` | — | `{min_date, max_date, photos_with_dates}` o `{min_date: null, max_date: null}` |
 | GET | `/stats/{folder_id}` | — | `{total_photos, photos_with_exif, photos_with_gps, unique_cameras, exif_coverage, gps_coverage}` (todo sobre el mismo conjunto, así que la cobertura no pasa del 100 %) |
 | GET | `/by-month/{folder_id}` | — | `{total_months, months: [{year, month, month_name, photo_count, photos (10 primeras)}]}`, de más reciente a más antiguo |
-| GET | `/gps-map/{folder_id}` | — | `{total, locations: [{id, filename, latitude, longitude, altitude, date_taken}]}` |
+| GET | `/gps-map/{folder_id}` | — | `{total, locations: [{id, filename, latitude, longitude, altitude, date_taken, has_thumb}]}` (solo fotos no borradas con GPS) |
+
+### 7.6 Geo (`/api/geo`, `backend/api/geo.py`)
+
+| Método | Ruta | Parámetros | Respuesta | Errores |
+| --- | --- | --- | --- | --- |
+| GET | `/search` | `q` (2–200 caracteres) | `{total, places: [{name, latitude, longitude, bbox: {south, north, west, east}}]}` (máx. 5) | 422; **502** si Nominatim no responde |
+
+Es el único endpoint que sale a internet: hace de proxy a `https://nominatim.openstreetmap.org/search` con un `User-Agent` propio (`PhotoCleaner/1.0`), como pide la política de uso de Nominatim, y cachea los resultados en memoria por texto buscado (`lru_cache`, 256 entradas). Solo envía el texto buscado. Los tests simulan `urllib.request.urlopen`.
 
 ## 8. Frontend (`frontend/src`)
 
@@ -318,12 +328,13 @@ src/
 ├── components/          PhotoViewer, ThumbnailStrip, BatchActionBar, Toast, ErrorBoundary,
 │                        KeyboardShortcuts, ProgressBar
 ├── hooks/useBackgroundTask.js   sondea GET /photos/tasks/{id} cada 1 s hasta que la tarea termina o la consulta falla
-├── services/api.js      cliente axios + foldersAPI, photosAPI, similarAPI, metadataAPI, apiErrorMessage
+├── services/api.js      cliente axios + foldersAPI, photosAPI, similarAPI, metadataAPI, geoAPI, apiErrorMessage
 └── utils/format.js      formatFileSize
 ```
 
 - **`services/api.js`**: la base es `import.meta.env.VITE_API_URL || 'http://localhost:8000/api'`. `photosAPI.getFile` no hace ninguna petición: devuelve la URL para un `<img>`. `apiErrorMessage(error, fallback)` extrae `detail` o `message` de la respuesta del backend.
 - **Gallery**:
+  - Filtros de posición por URL (`utils/geo.js::readPositionFilter`): los parámetros de zona o radio se pasan tal cual a `/photos/list`, se muestra una barra con el filtro (con selector de radio para «Nearby photos») y `?photo=ID` sitúa la galería en esa foto en cuanto se carga. «View on map» (tecla `M`) abre `/map/:id?focus=ID`; «Nearby photos» abre la galería con `near_lat/near_lon/radius_km=1`.
   - **Carga paginada**: pide `/photos/list` de 2.000 en 2.000 (`PAGE_SIZE`; el backend admite hasta 5.000) hasta llegar a `total`. En la primera carga muestra cada página en cuanto llega (`progressive`); en las recargas solo sustituye la lista cuando está completa, para no perder la posición. Un contador de peticiones descarta las cargas que ya no son las más recientes.
   - **Detalle bajo demanda**: la lista solo contiene resúmenes. Para la foto actual se pide `/photos/get/{id}`, que se vuelve a pedir cuando cambia `imageRevision` tras rotar o voltear, y se combina con el resumen. La imagen principal usa `getFile(id, false, preferWeb)&rev=N` para evitar la caché del navegador.
   - Generación de miniaturas y versiones web con los endpoints `*-async` y `useBackgroundTask`; al terminar recarga la lista y las estadísticas. Si la consulta del estado falla (p. ej. 404 porque el backend se reinició y la tarea ya no existe), el hook deja de sondear y la galería muestra el error.
@@ -332,6 +343,7 @@ src/
 - **ThumbnailStrip**: solo pinta las miniaturas en una **ventana de ±60** alrededor de la foto actual (`STRIP_WINDOW`, como mucho 121 nodos), con `loading="lazy"`, y centra la miniatura activa. Ctrl/Cmd+clic alterna la selección. Si una foto no tiene miniatura, carga el archivo completo.
 - **BatchActionBar**: aparece cuando hay selección; las acciones son favorito, borrar (con confirmación) y limpiar la selección, y van a `/photos/batch-operation`.
 - **Compare**: pide los grupos pendientes y el detalle de cada uno, descartando las fotos ya borradas y los grupos que se quedan con menos de 2. Si no queda ninguno, lanza `similar/analyze`, espera a que termine mostrando el progreso, agrupa (`threshold` 5) y vuelve a pedirlos. «Delete Selected» y «Delete Others» borran con `/photos/delete` y después marcan el grupo como revisado con `skip`; no usan `select`, así que `selected_photo_id` no se guarda desde la UI. Atajos (desactivados mientras está abierta la ayuda): `1`–`9` seleccionan, ←/→ cambian de grupo, `S` salta el grupo.
+- **MapView** (`pages/MapView.jsx`, ruta `/map/:folderId`, cargada con `React.lazy`): pide `/metadata/gps-map` y pinta un `L.circleMarker` por foto dentro de un `L.markerClusterGroup` con `chunkedLoading`. El encuadre inicial (o el popup de `?focus=ID`) se hace en `chunkProgress` cuando se han procesado todos los marcadores, en el tick siguiente, porque markercluster avisa antes de terminar de montar el árbol. El popup (miniatura, nombre, fecha y «Open in gallery» → `/gallery/:id?photo=ID`) se construye bajo demanda. «Select area» desactiva el arrastre del mapa y dibuja un `Rectangle` con mousedown/move/up; «Use visible area» usa `map.getBounds()`. La zona se convierte con `utils/geo.js::boundsToArea`, que normaliza las copias del mundo y el antimeridiano. El recuento se hace en el cliente con la misma regla que el backend (`isInArea`), y «Open in gallery» navega a `/gallery/:id?min_lat=…`. El buscador llama a `geoAPI.searchPlaces` y hace `flyToBounds` a la `bbox` elegida.
 - **Toast**: `ToastProvider` + `useToast()` con los tipos `info`/`success` (4 s) y `error` (7 s); sustituye a `alert()`.
 - **ErrorBoundary**: si un error de render escapa de una página, muestra una pantalla de recuperación con «Reload» y «Back to Home».
 - **KeyboardShortcuts**: modal de ayuda global que se abre con `?` y se cierra con `Esc` o con un clic fuera.

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { ChevronLeft, ChevronRight, Info, X } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Info, LocateFixed, MapPin, X } from 'lucide-react';
 import { formatFileSize } from '../utils/format';
 
 const MAP_MARGIN_DEGREES = 0.02;
@@ -89,7 +89,18 @@ function ZoomableImage({ src, alt }) {
 }
 
 // Main photo with its collapsible info panel (metadata, map, undo-delete notice)
-function PhotoViewer({ photo, src, isShowingWebVersion, onPrevious, onNext, deleteNotice, onUndoDelete, onDismissDeleteNotice }) {
+function PhotoViewer({
+  photo,
+  src,
+  isShowingWebVersion,
+  onPrevious,
+  onNext,
+  deleteNotice,
+  onUndoDelete,
+  onDismissDeleteNotice,
+  onShowOnMap,
+  onShowNearby
+}) {
   const [infoCollapsed, setInfoCollapsed] = useState(false);
 
   const displayedWidth = isShowingWebVersion ? (photo.web_width || photo.width) : photo.width;
@@ -156,8 +167,18 @@ function PhotoViewer({ photo, src, isShowingWebVersion, onPrevious, onNext, dele
                         loading="lazy"
                         referrerPolicy="no-referrer-when-downgrade"
                       />
+                      <div className="photo-map-actions">
+                        <button className="btn btn-secondary" onClick={onShowOnMap} title="Show on the photo map (M)">
+                          <MapPin size={14} />
+                          View on map
+                        </button>
+                        <button className="btn btn-secondary" onClick={onShowNearby} title="Photos taken within 1 km">
+                          <LocateFixed size={14} />
+                          Nearby photos
+                        </button>
+                      </div>
                       <a href={map.link} target="_blank" rel="noreferrer" className="photo-map-link">
-                        Open map
+                        Open in OpenStreetMap
                       </a>
                     </div>
                   </>

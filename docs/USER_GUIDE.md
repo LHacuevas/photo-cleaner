@@ -110,6 +110,8 @@ La galería muestra una foto grande, una tira de miniaturas abajo y una barra de
 | **Back** | Vuelve a la pantalla de inicio |
 | **Generate Thumbnails** | Genera las miniaturas que falten (solo aparece mientras a alguna foto le falte la miniatura) |
 | **Find Duplicates** | Abre la revisión de duplicados (ver sección 4) |
+| **Map** | Abre el mapa de fotos centrado en la foto actual si tiene GPS (ver sección 5); tecla `M` |
+| **Favorites** | Muestra solo las favoritas (el botón queda resaltado con borde ámbar); otra pulsación vuelve a mostrar todas |
 | Estrella (**Favorite (F)**) | Marca o desmarca la foto como favorita |
 | Flecha circular (**Rotate 90 deg (R)**) | Gira la foto 90° en el sentido de las agujas del reloj |
 | Espejo (**Flip Horizontal (H)**) | Voltea la foto horizontalmente |
@@ -136,7 +138,7 @@ A la izquierda de la foto hay un panel con:
 - Nombre del archivo y qué estás viendo (**Showing: Web version** u **Original**).
 - **Resolution** (resolución) y **Size** (tamaño en disco) de la versión mostrada.
 - **Camera** (modelo de cámara), **Lens** (objetivo) y **Date** (fecha de la toma), si la foto los tiene.
-- **Location** (coordenadas GPS) y un mapa de OpenStreetMap, con el enlace **Open map** para abrirlo en una pestaña nueva. Solo aparece si la foto tiene GPS.
+- **Location** (coordenadas GPS) con un minimapa y tres acciones: **View on map** (abre la foto en el mapa de fotos), **Nearby photos** (muestra en la galería las fotos tomadas a menos de 1 km) y **Open in OpenStreetMap** (pestaña nueva). Solo aparece si la foto tiene GPS.
 
 El botón **Hide** pliega el panel y **Info** lo vuelve a desplegar.
 
@@ -145,6 +147,8 @@ Si justo después de escanear ves `Resolution: ? x ?` y falta la fecha o la cám
 ### Favoritas
 
 Pulsa `F` o la estrella. La foto se marca y se copia a `preferite/`. Si la desmarcas, se borra esa copia (el original no se toca). En la tira de miniaturas, las favoritas llevan una estrella.
+
+Para revisar **solo las favoritas**, pulsa **Favorites** en la barra superior. Una barra amarilla indica el filtro y **Show all** lo quita. Si desmarcas una foto mientras estás en esta vista, desaparece de la lista. El filtro se combina con los del mapa: por ejemplo, **Nearby photos** con **Favorites** activo muestra solo las favoritas cercanas.
 
 ### Descartar (borrar) y deshacer
 
@@ -215,7 +219,38 @@ Cuando pasas del último grupo, aparece «All groups reviewed!» y vuelves a la 
 
 ---
 
-## 5. Atajos de teclado
+## 5. Mapa y búsqueda por posición
+
+Las fotos con coordenadas GPS se pueden ver sobre un mapa y filtrar por el lugar donde se tomaron. Abre el mapa con el botón **Map** de la galería o con la tecla `M`.
+
+### El mapa de fotos
+
+- Las fotos cercanas se agrupan en círculos con un número (*clusters*). Haz zoom o clic sobre ellos para separarlas. Funciona con decenas de miles de fotos.
+- Cada punto azul es una foto. Al hacer clic se ve su miniatura, el nombre y la fecha, y el botón **Open in gallery** la abre en la galería.
+- Arriba se indica cuántas fotos tienen ubicación. Las que no tienen GPS (o aún no se han analizado tras el escaneo) no aparecen.
+- **Gallery** vuelve a la galería.
+
+### Buscar por zona
+
+1. Pulsa **Select area** (el cursor pasa a ser una cruz) y arrastra sobre el mapa para dibujar un rectángulo. O pulsa **Use visible area** para usar todo lo que se ve en pantalla.
+2. Abajo aparece cuántas fotos hay dentro de la zona.
+3. **Open in gallery** abre la galería con **solo esas fotos**. Una barra naranja indica el filtro activo; **Back to map** vuelve al mapa y **Show all** quita el filtro.
+
+Funciona también con zonas que cruzan el meridiano de 180° (por ejemplo, el Pacífico).
+
+### Fotos cercanas
+
+En el panel de información de una foto con GPS, **Nearby photos** muestra en la galería las fotos tomadas a menos de **1 km**. En la barra del filtro puedes cambiar el radio (0,2, 1, 5, 25 o 100 km). La galería se abre en la misma foto desde la que partiste.
+
+### Buscar un lugar por su nombre
+
+Escribe un lugar en el buscador del mapa (por ejemplo «Granada» o «Marrakech») y pulsa la lupa. Aparece una lista de coincidencias; al elegir una, el mapa vuela hasta ella. Después puedes usar **Use visible area** para ver sus fotos.
+
+Esta búsqueda usa **Nominatim**, el buscador de OpenStreetMap. Lo que escribes se envía a internet (a través del backend); tus fotos y sus coordenadas, no. Sin conexión, la búsqueda muestra un aviso y el resto del mapa con las fotos sigue funcionando, aunque sin fondo de mapa.
+
+---
+
+## 6. Atajos de teclado
 
 Pulsa `?` en cualquier momento para ver la ayuda de atajos (`Esc` la cierra).
 
@@ -228,6 +263,7 @@ Pulsa `?` en cualquier momento para ver la ayuda de atajos (`Esc` la cierra).
 | Galería | `R` | Girar 90° a la derecha |
 | Galería | `H` | Voltear en horizontal |
 | Galería | `V` | Cambiar entre versión web y original |
+| Galería | `M` | Abrir la foto en el mapa |
 | Galería | `Ctrl+clic` en una miniatura | Seleccionar o deseleccionar para acciones por lotes |
 | Galería | Rueda / arrastrar | Zoom / mover la imagen ampliada |
 | Duplicados | `1`–`9` | Seleccionar o deseleccionar la foto con ese número |
@@ -237,7 +273,7 @@ Pulsa `?` en cualquier momento para ver la ayuda de atajos (`Esc` la cierra).
 
 ---
 
-## 6. Formatos compatibles
+## 7. Formatos compatibles
 
 | Formato | Extensiones | Se ve en la galería | Miniaturas y web | Girar / voltear | Duplicados y metadatos |
 | --- | --- | --- | --- | --- | --- |
@@ -257,13 +293,14 @@ Notas:
 
 ---
 
-## 7. Consejos para archivos grandes
+## 8. Consejos para archivos grandes
 
 - **Primero las miniaturas.** Sin miniaturas, la tira de abajo carga los originales completos, lo que es lento con fotos grandes y muy lento con TIFF, HEIC o RAW. Pulsa **Generate Thumbnails** nada más escanear.
 - **Después, las versiones web.** Con originales de muchos megapíxeles, el botón del monitor (**Generate Web Version**) crea copias de 2048 px por el lado largo (nunca se amplía una foto más pequeña). La galería las usa por defecto y la navegación es mucho más fluida. En la interfaz solo existe este tamaño: no hay selector de calidad ni de tamaño.
 - **Las tareas se pueden interrumpir.** Si cierras la aplicación a mitad de una generación, al volver a pulsar el botón solo se procesan las que falten. Lo mismo pasa con el análisis: se reanuda al volver a escanear la carpeta o al abrir **Find Duplicates**.
 - **Espacio en disco.** Las versiones web y las copias de `preferite/` ocupan espacio extra. Las miniaturas ocupan poco.
-- **Metadatos en las versiones web.** Las versiones web en JPEG conservan los datos EXIF del original (fecha, cámara y **ubicación GPS**). Tenlo en cuenta antes de compartirlas.
+- **Metadatos en las versiones web.** Las versiones web en JPEG conservan los datos EXIF del original (fecha, cámara y **ubicación GPS**). Tenlo en cuenta antes de compartirlas. Las versiones web de PNG, WebP y GIF no llevan EXIF; las miniaturas tampoco, a propósito.
+- **Fechas de archivo.** Las versiones web y las copias de `preferite/` tienen las mismas fechas de archivo que el original (modificación y, en Windows, también creación), así que ordenar por fecha en el Explorador da el mismo orden. Rotar o voltear una foto tampoco cambia sus fechas de archivo.
 - **Proyectos por carpeta.** Cada ruta escaneada es un proyecto. Si mueves o renombras la carpeta principal, escanea la nueva ruta: se creará un proyecto nuevo (el antiguo seguirá en la lista).
 - **Repetir el análisis tras actualizar la aplicación.** Las versiones nuevas pueden analizar mejor (por ejemplo, la detección de duplicados que tiene en cuenta la orientación o la lectura del objetivo). Para volver a analizar fotos ya indexadas, abre una consola en la carpeta `backend` y ejecuta:
 
@@ -277,16 +314,18 @@ Notas:
 
 ---
 
-## 8. Privacidad
+## 9. Privacidad
 
 - Todo se hace en tu ordenador: las fotos, la base de datos (`backend/photo_cleaner.db`) y las miniaturas no salen de él.
 - El servidor solo escucha en `127.0.0.1`, así que solo tu propio ordenador puede conectarse.
 - Puedes abrirlo a tu red local con `PHOTO_CLEANER_HOST=0.0.0.0` en `backend/.env`. **Cuidado:** cualquiera en tu red podría ver fotos de tu disco. No lo hagas en redes que no controlas.
-- La única conexión a internet es el **mapa** del panel de información: cuando una foto tiene GPS, se cargan los mapas de OpenStreetMap con esas coordenadas.
+- Conexiones a internet, siempre a OpenStreetMap:
+  - **Fondos de mapa** (minimapa del panel de información y pantalla **Map**): se descargan las teselas de la zona que miras.
+  - **Búsqueda de lugares** en el mapa: se envía solo el texto que escribes, nunca tus fotos ni sus coordenadas.
 
 ---
 
-## 9. Preguntas frecuentes y problemas
+## 10. Preguntas frecuentes y problemas
 
 **¿Cómo vacío la papelera?**
 La aplicación no borra nada de forma definitiva. Cuando estés seguro, borra a mano el contenido de `cancellate/` desde el Explorador de Windows y vuelve a escanear la carpeta para que la aplicación olvide esas fotos.

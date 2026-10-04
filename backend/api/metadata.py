@@ -296,7 +296,8 @@ def get_gps_locations(folder_id: int, db: Session = Depends(get_db)):
                 "latitude": photo.gps_latitude,
                 "longitude": photo.gps_longitude,
                 "altitude": photo.gps_altitude,
-                "date_taken": photo.date_taken.isoformat() if photo.date_taken else None
+                "date_taken": photo.date_taken.isoformat() if photo.date_taken else None,
+                "has_thumb": photo.has_thumb
             })
         
         return {

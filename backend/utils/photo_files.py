@@ -7,6 +7,7 @@ from typing import Optional
 import shutil
 
 from database import Photo
+from utils.file_times import copy_file_times
 from utils.image_processing import ImageProcessor
 
 
@@ -75,7 +76,9 @@ def set_favorite(photo: Photo, is_favorite: bool):
 
     if is_favorite:
         favorite_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(get_original_path(photo), favorite_path)
+        original_path = get_original_path(photo)
+        shutil.copy2(original_path, favorite_path)
+        copy_file_times(original_path, favorite_path)  # copy2 doesn't keep the creation date on Windows
     elif favorite_path.exists():
         favorite_path.unlink()
 
