@@ -2,14 +2,16 @@
 Photos API - Get photos, navigate, mark favorites, delete
 """
 
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Query
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from pathlib import Path
 from typing import List, Optional
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import logging
+import os
 
-from database import get_db, Photo
+from database import get_db, SessionLocal, Photo
 from utils.image_processing import ImageProcessor, ROTATIONS, FLIPS
 from utils.task_queue import task_queue
 from utils.photo_files import (
@@ -26,6 +28,11 @@ from pydantic import BaseModel
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+MAX_PAGE_SIZE = 5000
+
+# FFmpeg is an external process, so threads are enough to use several cores
+GENERATION_WORKERS = max(2, (os.cpu_count() or 4) // 2)
 
 def _sync_generated_flags(photo: Photo) -> tuple[bool, bool]:
     """Sync has_thumb/has_web with the filesystem for the current photo."""
@@ -114,6 +121,18 @@ def _serialize_photo(photo: Photo) -> dict:
     }
 
 
+def _serialize_photo_summary(photo: Photo) -> dict:
+    """Lightweight serialization for listings: DB fields only, no filesystem access."""
+    return {
+        "id": photo.id,
+        "filename": photo.filename,
+        "is_favorite": photo.is_favorite,
+        "is_deleted": photo.is_deleted,
+        "has_thumb": photo.has_thumb,
+        "has_web": photo.has_web,
+    }
+
+
 class PhotoResponse(BaseModel):
     id: int
     filename: str
@@ -147,16 +166,17 @@ class BatchOperationResponse(BaseModel):
     message: str
 
 @router.get("/list/{folder_id}")
-async def list_photos(
+def list_photos(
     folder_id: int,
-    skip: int = 0,
-    limit: int = 100,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=MAX_PAGE_SIZE),
     only_favorites: bool = False,
     only_deleted: bool = False,
     db: Session = Depends(get_db)
 ):
     """
-    List photos in a folder with pagination
+    List photos in a folder with pagination.
+    Returns summaries only; use /get/{photo_id} for metadata and web version details.
     """
     try:
         query = db.query(Photo).filter(Photo.folder_id == folder_id)
@@ -169,8 +189,8 @@ async def list_photos(
         else:
             query = query.filter(Photo.is_deleted == False)
         
-        # Order by filename
-        query = query.order_by(Photo.filename)
+        # Order by filename (id breaks ties so pages never overlap)
+        query = query.order_by(Photo.filename, Photo.id)
         
         total = query.count()
         photos = query.offset(skip).limit(limit).all()
@@ -179,7 +199,7 @@ async def list_photos(
             "total": total,
             "skip": skip,
             "limit": limit,
-            "photos": [_serialize_photo(p) for p in photos]
+            "photos": [_serialize_photo_summary(p) for p in photos]
         }
         
     except HTTPException:
@@ -190,7 +210,7 @@ async def list_photos(
 
 
 @router.get("/get/{photo_id}")
-async def get_photo(photo_id: int, db: Session = Depends(get_db)):
+def get_photo(photo_id: int, db: Session = Depends(get_db)):
     """Get detailed info for a single photo"""
     try:
         photo = db.query(Photo).filter(Photo.id == photo_id).first()
@@ -208,7 +228,7 @@ async def get_photo(photo_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/file/{photo_id}")
-async def get_photo_file(photo_id: int, thumb: bool = False, prefer_web: bool = False, db: Session = Depends(get_db)):
+def get_photo_file(photo_id: int, thumb: bool = False, prefer_web: bool = False, db: Session = Depends(get_db)):
     """Serve the actual photo file or thumbnail"""
     try:
         photo = db.query(Photo).filter(Photo.id == photo_id).first()
@@ -242,7 +262,7 @@ async def get_photo_file(photo_id: int, thumb: bool = False, prefer_web: bool = 
 
 
 @router.post("/favorite/{photo_id}")
-async def toggle_favorite(photo_id: int, db: Session = Depends(get_db)):
+def toggle_favorite(photo_id: int, db: Session = Depends(get_db)):
     """Toggle favorite status and copy/move to preferite folder"""
     try:
         photo = db.query(Photo).filter(Photo.id == photo_id).first()
@@ -268,7 +288,7 @@ async def toggle_favorite(photo_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/delete/{photo_id}")
-async def delete_photo(photo_id: int, db: Session = Depends(get_db)):
+def delete_photo(photo_id: int, db: Session = Depends(get_db)):
     """Move photo to cancellate folder (non-destructive delete)"""
     try:
         photo = db.query(Photo).filter(Photo.id == photo_id).first()
@@ -294,7 +314,7 @@ async def delete_photo(photo_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/restore/{photo_id}")
-async def restore_photo(photo_id: int, db: Session = Depends(get_db)):
+def restore_photo(photo_id: int, db: Session = Depends(get_db)):
     """Restore photo from cancellate folder"""
     try:
         photo = db.query(Photo).filter(Photo.id == photo_id).first()
@@ -322,52 +342,83 @@ async def restore_photo(photo_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/generate-thumbs/{folder_id}")
-async def generate_thumbnails(folder_id: int, db: Session = Depends(get_db)):
-    """Generate thumbnails for all photos in folder"""
-    try:
-        photos = _get_missing_generated_photos(db, folder_id, "thumb")
-        
-        if not photos:
-            return {
-                "total": 0,
-                "success": 0,
-                "errors": 0,
-                "message": "All thumbnails have already been created"
-            }
-        
-        processor = ImageProcessor()
-        success_count = 0
-        error_count = 0
-        
-        logger.info(f"Starting thumbnail generation for {len(photos)} photos in folder {folder_id}")
-        
-        for i, photo in enumerate(photos, 1):
-            original_path = Path(photo.filepath)
-            thumb_path = get_thumb_path(photo)
-            
-            if processor.generate_thumbnail(original_path, thumb_path):
-                photo.has_thumb = True
+def _generate_variants(db: Session, folder_id: int, variant: str, mode: str = 'web', task=None) -> dict:
+    """
+    Generate the missing thumbs ("thumb") or web versions ("web") of a folder.
+    FFmpeg runs in parallel worker threads; all DB writes stay in the calling thread.
+    """
+    photos = _get_missing_generated_photos(db, folder_id, variant)
+
+    if variant == "thumb":
+        generate = ImageProcessor.generate_thumbnail
+        get_target_path = get_thumb_path
+    else:
+        generate = lambda source, target: ImageProcessor.generate_web_version(source, target, mode)
+        get_target_path = get_web_path
+
+    # Resolve paths up front: ORM objects must not be touched from worker threads
+    jobs = [(photo, get_original_path(photo), get_target_path(photo)) for photo in photos]
+    success_count = 0
+    error_count = 0
+
+    logger.info(f"Generating {variant} for {len(jobs)} photos in folder {folder_id} ({GENERATION_WORKERS} workers)")
+
+    with ThreadPoolExecutor(max_workers=GENERATION_WORKERS) as pool:
+        futures = {pool.submit(generate, source, target): photo for photo, source, target in jobs}
+
+        for done, future in enumerate(as_completed(futures), 1):
+            photo = futures[future]
+            if future.result():
+                if variant == "thumb":
+                    photo.has_thumb = True
+                else:
+                    photo.has_web = True
                 success_count += 1
-                logger.info(f"[{i}/{len(photos)}] Thumbnail generated: {photo.filename}")
             else:
                 error_count += 1
-                logger.warning(f"[{i}/{len(photos)}] Failed to generate thumbnail: {photo.filename}")
-            
-            # Commit every 10 photos to show progress
-            if i % 10 == 0:
+
+            if done % 50 == 0:
                 db.commit()
-                logger.info(f"Progress: {i}/{len(photos)} photos processed ({success_count} success, {error_count} errors)")
+                logger.info(f"Progress: {done}/{len(jobs)} ({success_count} success, {error_count} errors)")
+
+            if task:
+                task.set_progress(done, len(jobs))
+                if task.is_cancelled:
+                    pool.shutdown(cancel_futures=True)
+                    break
+
+    db.commit()
+    logger.info(f"Generation of {variant} finished: {success_count} success, {error_count} errors")
+
+    return {
+        "total": len(jobs),
+        "success": success_count,
+        "errors": error_count,
+    }
+
+
+def _enqueue_generation(name: str, folder_id: int, variant: str, mode: str = 'web') -> str:
+    def run(task):
+        db = SessionLocal()
+        try:
+            result = _generate_variants(db, folder_id, variant, mode, task)
+            return {**result, "mode": mode} if variant == "web" else result
+        finally:
+            db.close()
+
+    return task_queue.enqueue(name, run)
+
+
+@router.post("/generate-thumbs/{folder_id}")
+def generate_thumbnails(folder_id: int, db: Session = Depends(get_db)):
+    """Generate thumbnails for all photos in folder (blocks until done)"""
+    try:
+        result = _generate_variants(db, folder_id, "thumb")
         
-        db.commit()
-        logger.info(f"Thumbnail generation completed: {success_count} success, {error_count} errors")
+        if result["total"] == 0:
+            return {**result, "message": "All thumbnails have already been created"}
         
-        return {
-            "total": len(photos),
-            "success": success_count,
-            "errors": error_count,
-            "message": f"Generated {success_count} thumbnails, {error_count} failed"
-        }
+        return {**result, "message": f"Generated {result['success']} thumbnails, {result['errors']} failed"}
         
     except HTTPException:
         raise
@@ -377,57 +428,19 @@ async def generate_thumbnails(folder_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/generate-web/{folder_id}")
-async def generate_web_versions(
+def generate_web_versions(
     folder_id: int,
     mode: str = 'web',
     db: Session = Depends(get_db)
 ):
-    """Generate web-optimized versions for all photos"""
+    """Generate web-optimized versions for all photos (blocks until done)"""
     try:
-        photos = _get_missing_generated_photos(db, folder_id, "web")
+        result = {**_generate_variants(db, folder_id, "web", mode), "mode": mode}
         
-        if not photos:
-            return {
-                "total": 0,
-                "success": 0,
-                "errors": 0,
-                "mode": mode,
-                "message": "All web versions have already been created"
-            }
+        if result["total"] == 0:
+            return {**result, "message": "All web versions have already been created"}
         
-        processor = ImageProcessor()
-        success_count = 0
-        error_count = 0
-        
-        logger.info(f"Starting web version generation ({mode} mode) for {len(photos)} photos in folder {folder_id}")
-        
-        for i, photo in enumerate(photos, 1):
-            original_path = Path(photo.filepath)
-            web_path = get_web_path(photo)
-            
-            if processor.generate_web_version(original_path, web_path, mode):
-                photo.has_web = True
-                success_count += 1
-                logger.info(f"[{i}/{len(photos)}] Web version generated ({mode}): {photo.filename}")
-            else:
-                error_count += 1
-                logger.warning(f"[{i}/{len(photos)}] Failed to generate web version ({mode}): {photo.filename}")
-            
-            # Commit every 10 photos to show progress
-            if i % 10 == 0:
-                db.commit()
-                logger.info(f"Progress: {i}/{len(photos)} photos processed ({success_count} success, {error_count} errors)")
-        
-        db.commit()
-        logger.info(f"Web version generation completed: {success_count} success, {error_count} errors")
-        
-        return {
-            "total": len(photos),
-            "success": success_count,
-            "errors": error_count,
-            "mode": mode,
-            "message": f"Generated {success_count} web versions ({mode}), {error_count} failed"
-        }
+        return {**result, "message": f"Generated {result['success']} web versions ({mode}), {result['errors']} failed"}
         
     except HTTPException:
         raise
@@ -437,7 +450,7 @@ async def generate_web_versions(
 
 
 @router.post("/batch-operation")
-async def batch_operation(
+def batch_operation(
     request: BatchOperationRequest,
     db: Session = Depends(get_db)
 ):
@@ -517,70 +530,21 @@ async def batch_operation(
 
 
 @router.post("/generate-thumbs-async/{folder_id}")
-async def generate_thumbnails_async(folder_id: int, db: Session = Depends(get_db)):
+def generate_thumbnails_async(folder_id: int, db: Session = Depends(get_db)):
     """Generate thumbnails asynchronously (background task)"""
     try:
-        missing_photos = _get_missing_generated_photos(db, folder_id, "thumb")
-        if not missing_photos:
+        if not _get_missing_generated_photos(db, folder_id, "thumb"):
             return {
                 "task_id": None,
                 "message": "All thumbnails have already been created",
                 "status": "already_exists"
             }
 
-        # Define async task function
-        async def generate_thumbs_task(task=None):
-            """Task function for thumbnail generation"""
-            db_local = get_db().__next__()
-            try:
-                photos = _get_missing_generated_photos(db_local, folder_id, "thumb")
-                
-                processor = ImageProcessor()
-                success_count = 0
-                error_count = 0
-                
-                total = len(photos)
-
-                for i, photo in enumerate(photos, 1):
-                    try:
-                        original_path = Path(photo.filepath)
-                        thumb_path = get_thumb_path(photo)
-                        
-                        if processor.generate_thumbnail(original_path, thumb_path):
-                            photo.has_thumb = True
-                            success_count += 1
-                        else:
-                            error_count += 1
-
-                        if task and total > 0:
-                            task.progress = int(i / total * 100)
-                        
-                        if i % 10 == 0:
-                            db_local.commit()
-                    
-                    except Exception as e:
-                        error_count += 1
-                        logger.error(f"Error generating thumb: {e}")
-                
-                db_local.commit()
-                return {
-                    "total": len(photos),
-                    "success": success_count,
-                    "errors": error_count
-                }
-            
-            finally:
-                db_local.close()
-        
-        # Enqueue task
-        task_id = task_queue.enqueue(
-            f"Generate thumbnails for folder {folder_id}",
-            generate_thumbs_task
-        )
+        task_id = _enqueue_generation(f"Generate thumbnails for folder {folder_id}", folder_id, "thumb")
         
         return {
             "task_id": task_id,
-            "message": f"Thumbnail generation started in background",
+            "message": "Thumbnail generation started in background",
             "status_url": f"/api/photos/tasks/{task_id}"
         }
     
@@ -592,71 +556,21 @@ async def generate_thumbnails_async(folder_id: int, db: Session = Depends(get_db
 
 
 @router.post("/generate-web-async/{folder_id}")
-async def generate_web_async(
+def generate_web_async(
     folder_id: int,
     mode: str = 'web',
     db: Session = Depends(get_db)
 ):
     """Generate web versions asynchronously (background task)"""
     try:
-        missing_photos = _get_missing_generated_photos(db, folder_id, "web")
-        if not missing_photos:
+        if not _get_missing_generated_photos(db, folder_id, "web"):
             return {
                 "task_id": None,
                 "message": f"All web versions ({mode}) have already been created",
                 "status": "already_exists"
             }
 
-        # Define async task function
-        async def generate_web_task(task=None):
-            """Task function for web version generation"""
-            db_local = get_db().__next__()
-            try:
-                photos = _get_missing_generated_photos(db_local, folder_id, "web")
-                
-                processor = ImageProcessor()
-                success_count = 0
-                error_count = 0
-                
-                total = len(photos)
-
-                for i, photo in enumerate(photos, 1):
-                    try:
-                        original_path = Path(photo.filepath)
-                        web_path = get_web_path(photo)
-                        
-                        if processor.generate_web_version(original_path, web_path, mode):
-                            photo.has_web = True
-                            success_count += 1
-                        else:
-                            error_count += 1
-
-                        if task and total > 0:
-                            task.progress = int(i / total * 100)
-                        
-                        if i % 10 == 0:
-                            db_local.commit()
-                    
-                    except Exception as e:
-                        error_count += 1
-                        logger.error(f"Error generating web version: {e}")
-                
-                db_local.commit()
-                return {
-                    "total": len(photos),
-                    "success": success_count,
-                    "errors": error_count,
-                    "mode": mode
-                }
-            
-            finally:
-                db_local.close()
-        
-        # Enqueue task
-        task_id = task_queue.enqueue(
-            f"Generate web versions ({mode}) for folder {folder_id}",
-            generate_web_task
-        )
+        task_id = _enqueue_generation(f"Generate web versions ({mode}) for folder {folder_id}", folder_id, "web", mode)
         
         return {
             "task_id": task_id,
@@ -672,7 +586,7 @@ async def generate_web_async(
 
 
 @router.get("/tasks/{task_id}")
-async def get_task_status(task_id: str):
+def get_task_status(task_id: str):
     """Get status of a background task"""
     try:
         task_status = task_queue.get_task_status(task_id)
@@ -689,8 +603,17 @@ async def get_task_status(task_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/tasks/{task_id}/cancel")
+def cancel_task(task_id: str):
+    """Cancel a pending or running background task"""
+    if not task_queue.get_task(task_id):
+        raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+    
+    return {"id": task_id, "cancelled": task_queue.cancel_task(task_id)}
+
+
 @router.get("/tasks")
-async def list_tasks(status: Optional[str] = None):
+def list_tasks(status: Optional[str] = None):
     """List all background tasks"""
     try:
         tasks = task_queue.list_tasks()
@@ -736,7 +659,7 @@ def _transform_photo(photo: Photo, op) -> None:
 
 
 @router.post("/rotate/{photo_id}")
-async def rotate_photo(
+def rotate_photo(
     photo_id: int,
     degrees: int = 90,
     db: Session = Depends(get_db)
@@ -775,7 +698,7 @@ async def rotate_photo(
 
 
 @router.post("/flip/{photo_id}")
-async def flip_photo(
+def flip_photo(
     photo_id: int,
     direction: str = 'horizontal',
     db: Session = Depends(get_db)

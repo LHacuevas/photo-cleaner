@@ -182,13 +182,12 @@ class ImageProcessor:
             dict with phash and dhash as strings
         """
         try:
-            img = Image.open(image_path)
-            
-            # Perceptual hash (best for finding similar images)
-            phash = str(imagehash.phash(img, hash_size=8))
-            
-            # Difference hash (good for rotations/crops)
-            dhash = str(imagehash.dhash(img, hash_size=8))
+            with Image.open(image_path) as img:
+                # Perceptual hash (best for finding similar images)
+                phash = str(imagehash.phash(img, hash_size=8))
+                
+                # Difference hash (good for rotations/crops)
+                dhash = str(imagehash.dhash(img, hash_size=8))
             
             return {
                 'phash': phash,
@@ -212,14 +211,13 @@ class ImageProcessor:
             if isinstance(image_path, str):
                 image_path = Path(image_path)
             
-            img = Image.open(image_path)
-            
-            return {
-                'width': img.width,
-                'height': img.height,
-                'format': img.format,
-                'size': image_path.stat().st_size
-            }
+            with Image.open(image_path) as img:
+                return {
+                    'width': img.width,
+                    'height': img.height,
+                    'format': img.format,
+                    'size': image_path.stat().st_size
+                }
             
         except Exception as e:
             logger.error(f"Error getting image info for {image_path}: {e}")
@@ -234,8 +232,11 @@ class ImageProcessor:
             dict with camera info, settings, GPS, date taken
         """
         try:
-            img = Image.open(image_path)
-            exif_dict = piexif.load(img.info.get('exif', b''))
+            with Image.open(image_path) as img:
+                exif_bytes = img.info.get('exif')
+            if not exif_bytes:
+                return {}
+            exif_dict = piexif.load(exif_bytes)
             
             result = {
                 'date_taken': None,

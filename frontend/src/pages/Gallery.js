@@ -20,6 +20,10 @@ import ProgressBar from '../components/ProgressBar';
 import useBackgroundTask from '../hooks/useBackgroundTask';
 import './Gallery.css';
 
+const PAGE_SIZE = 2000;
+// Thumbnails rendered on each side of the current photo (the strip never renders the whole folder)
+const STRIP_WINDOW = 60;
+
 function Gallery() {
   const { folderId } = useParams();
   const navigate = useNavigate();
@@ -36,6 +40,7 @@ function Gallery() {
   const [taskKind, setTaskKind] = useState(null);
   const [imageRevision, setImageRevision] = useState(0);
   const [deleteNotice, setDeleteNotice] = useState(null);
+  const [photoDetails, setPhotoDetails] = useState(null);
   const [infoCollapsed, setInfoCollapsed] = useState(false);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -43,6 +48,7 @@ function Gallery() {
   const thumbnailStripRef = useRef(null);
   const thumbnailRefs = useRef({});
   const panStartRef = useRef({ x: 0, y: 0, panX: 0, panY: 0 });
+  const loadRequestRef = useRef(0);
 
   const {
     taskId,
@@ -56,7 +62,13 @@ function Gallery() {
 
   const generatingThumbs = backgroundTaskRunning && taskKind === 'thumbs';
   const generatingWeb = backgroundTaskRunning && taskKind === 'web';
-  const currentPhoto = photos[currentIndex];
+  // The list only has summaries; metadata and web version details come from /get for the current photo
+  const currentSummary = photos[currentIndex];
+  const currentPhoto = currentSummary && photoDetails?.id === currentSummary.id
+    ? { ...photoDetails, ...currentSummary }
+    : currentSummary;
+  const stripStart = Math.max(0, currentIndex - STRIP_WINDOW);
+  const stripPhotos = photos.slice(stripStart, currentIndex + STRIP_WINDOW + 1);
   const isShowingWebVersion = Boolean(currentPhoto?.has_web && showWebVersion);
   const mainPhotoSrc = currentPhoto
     ? `${photosAPI.getFile(currentPhoto.id, false, isShowingWebVersion)}&rev=${imageRevision}`
@@ -87,9 +99,29 @@ function Gallery() {
     : null;
 
   useEffect(() => {
-    loadPhotos();
+    loadPhotos({ progressive: true });
     loadFolderStats();
   }, [folderId]);
+
+  useEffect(() => {
+    if (!currentSummary?.id) {
+      setPhotoDetails(null);
+      return undefined;
+    }
+
+    let cancelled = false;
+    photosAPI.get(currentSummary.id)
+      .then((response) => {
+        if (!cancelled) {
+          setPhotoDetails(response.data);
+        }
+      })
+      .catch((error) => console.error('Error loading photo details:', error));
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentSummary?.id, imageRevision]);
 
   useEffect(() => {
     if (!backgroundTaskResult) {
@@ -147,19 +179,44 @@ function Gallery() {
     return `${value.toFixed(value >= 10 || exponent === 0 ? 0 : 1)} ${units[exponent]}`;
   };
 
-  const loadPhotos = async () => {
+  // Loads every page of the folder. `progressive` shows each page as it arrives (first load);
+  // reloads swap the list only once complete so the current position is kept.
+  const loadPhotos = async ({ progressive = false } = {}) => {
+    const requestId = ++loadRequestRef.current;
     try {
       setLoading(true);
-      const response = await photosAPI.list(folderId, { limit: 1000 });
-      const nextPhotos = response.data.photos || [];
-      setPhotos(nextPhotos);
-      setCurrentIndex((prev) => Math.min(prev, Math.max(0, nextPhotos.length - 1)));
+      let loaded = [];
+      let total = null;
+
+      while (total === null || loaded.length < total) {
+        const response = await photosAPI.list(folderId, { skip: loaded.length, limit: PAGE_SIZE });
+        if (requestId !== loadRequestRef.current) {
+          return; // a newer load has started
+        }
+
+        const page = response.data.photos || [];
+        total = response.data.total;
+        loaded = loaded.concat(page);
+
+        if (progressive) {
+          setPhotos(loaded);
+          setLoading(false);
+        }
+        if (page.length === 0) {
+          break;
+        }
+      }
+
+      setPhotos(loaded);
+      setCurrentIndex((prev) => Math.min(prev, Math.max(0, loaded.length - 1)));
       setSelectedIds(new Set());
     } catch (error) {
       console.error('Error loading photos:', error);
       alert('Error loading photos');
     } finally {
-      setLoading(false);
+      if (requestId === loadRequestRef.current) {
+        setLoading(false);
+      }
     }
   };
 
@@ -705,7 +762,9 @@ function Gallery() {
       </div>
 
       <div className="thumbnail-strip" ref={thumbnailStripRef}>
-        {photos.map((photo, index) => (
+        {stripPhotos.map((photo, stripIndex) => {
+          const index = stripStart + stripIndex;
+          return (
           <div
             key={photo.id}
             ref={(node) => {
@@ -732,7 +791,8 @@ function Gallery() {
             {photo.is_favorite && <Star className="fav-badge" size={16} />}
             {selectedIds.has(photo.id) && <div className="selection-badge">OK</div>}
           </div>
-        ))}
+          );
+        })}
       </div>
 
     </div>

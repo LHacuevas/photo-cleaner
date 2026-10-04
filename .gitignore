@@ -75,6 +75,9 @@ jspm_packages/
 # Optional eslint cache
 .eslintcache
 
+# pytest
+.pytest_cache/
+
 # Microbundle cache
 .rpt2_cache/
 .rts2_cache_cjs/
@@ -139,6 +142,8 @@ Thumbs.db
 *.db
 *.sqlite
 *.sqlite3
+*.db-wal
+*.db-shm
 
 # FFmpeg temp files
 ffmpeg*.log

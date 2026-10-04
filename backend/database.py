@@ -3,10 +3,11 @@ Database models and initialization
 SQLite database for storing photo metadata, hashes, and relationships
 """
 
-from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Boolean, ForeignKey
+from sqlalchemy import create_engine, event, Column, Integer, String, Float, DateTime, Boolean, ForeignKey
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 from datetime import datetime
+from pathlib import Path
 import os
 
 Base = declarative_base()
@@ -116,8 +117,21 @@ class PhotoSimilarGroup(Base):
 
 
 # Database setup
-DATABASE_URL = "sqlite:///./photo_cleaner.db"
+# Next to this file regardless of the working directory; overridable (e.g. tests use a temp DB)
+DATABASE_URL = os.getenv(
+    "PHOTO_CLEANER_DATABASE_URL",
+    f"sqlite:///{Path(__file__).resolve().parent / 'photo_cleaner.db'}"
+)
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+
+
+@event.listens_for(engine, "connect")
+def _configure_sqlite(dbapi_connection, connection_record):
+    # WAL lets readers (gallery) work while background tasks write; busy_timeout waits instead of failing on locks
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA busy_timeout=5000")
+    cursor.close()
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 

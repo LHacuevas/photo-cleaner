@@ -2,15 +2,17 @@
 Similar Photos API - Detect duplicates and similar photos using perceptual hashing
 """
 
-from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
+from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from pathlib import Path
 from typing import List, Dict
 import logging
-from collections import defaultdict
 
-from database import get_db, SessionLocal, Photo, SimilarGroup, PhotoSimilarGroup
+import numpy as np
+
+from database import get_db, Photo, SimilarGroup, PhotoSimilarGroup
+from utils.analysis import enqueue_folder_analysis
 from utils.image_processing import ImageProcessor
 from utils.photo_files import move_photo_variants
 from pydantic import BaseModel
@@ -37,6 +39,49 @@ def _get_web_file_details(photo: Photo) -> dict:
     }
 
 
+def _is_valid_hash(phash: str) -> bool:
+    try:
+        int(phash, 16)
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
+def _hash_array(photos: List[Photo]) -> np.ndarray:
+    """64-bit perceptual hashes as a uint64 array (same order as `photos`)"""
+    return np.array([int(photo.phash, 16) for photo in photos], dtype=np.uint64)
+
+
+def _find_groups(hashes: np.ndarray, threshold: int) -> List[List[int]]:
+    """
+    Greedy grouping by Hamming distance: each photo not grouped yet collects
+    every later ungrouped photo within `threshold` bits. Returns index lists.
+    Each row is one vectorized XOR + popcount instead of a Python pair loop.
+    """
+    available = np.ones(len(hashes), dtype=bool)
+    groups = []
+    
+    for i in range(len(hashes)):
+        if not available[i]:
+            continue
+        
+        distances = np.bitwise_count(hashes[i + 1:] ^ hashes[i])
+        matches = np.flatnonzero(available[i + 1:] & (distances <= threshold)) + i + 1
+        
+        if len(matches):
+            members = [i, *matches.tolist()]
+            available[members] = False
+            groups.append(members)
+    
+    return groups
+
+
+def _average_distance(hashes: np.ndarray) -> float:
+    """Mean pairwise Hamming distance within a group"""
+    pairwise = np.bitwise_count(hashes[:, None] ^ hashes[None, :])
+    return float(pairwise[np.triu_indices(len(hashes), k=1)].mean())
+
+
 class SimilarGroupResponse(BaseModel):
     id: int
     photo_count: int
@@ -47,33 +92,21 @@ class SimilarGroupResponse(BaseModel):
 
 
 @router.post("/analyze/{folder_id}")
-async def analyze_similar_photos(
-    folder_id: int,
-    background_tasks: BackgroundTasks,
-    db: Session = Depends(get_db)
-):
+def analyze_similar_photos(folder_id: int):
     """
-    Analyze photos in folder and detect similar/duplicate images
-    This is a long-running task, runs in background
+    Compute missing hashes/metadata for the folder in the background.
+    Returns the task to poll (an already running analysis is reused); group once it finishes.
     """
     try:
-        # Get all photos without hashes
-        photos = db.query(Photo).filter(
-            Photo.folder_id == folder_id,
-            Photo.is_deleted == False,
-            Photo.phash == None
-        ).all()
+        task_id = enqueue_folder_analysis(folder_id)
         
-        if not photos:
-            return {"message": "All photos already analyzed"}
-        
-        # Add background task to compute hashes (the request's session is closed by then,
-        # so the task only gets IDs and opens its own)
-        background_tasks.add_task(compute_photo_hashes, [p.id for p in photos])
+        if not task_id:
+            return {"task_id": None, "message": "All photos already analyzed"}
         
         return {
             "status": "started",
-            "photos_to_analyze": len(photos),
+            "task_id": task_id,
+            "status_url": f"/api/photos/tasks/{task_id}",
             "message": "Analysis started in background"
         }
         
@@ -84,59 +117,8 @@ async def analyze_similar_photos(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-def compute_photo_hashes(photo_ids: List[int]):
-    """Background task to compute hashes for photos (sync, so it runs in the threadpool)"""
-    processor = ImageProcessor()
-    db = SessionLocal()
-    try:
-        _compute_photo_hashes(db.query(Photo).filter(Photo.id.in_(photo_ids)).all(), db, processor)
-    finally:
-        db.close()
-
-
-def _compute_photo_hashes(photos: List[Photo], db: Session, processor: ImageProcessor):
-    for photo in photos:
-        try:
-            hashes = processor.compute_hashes(Path(photo.filepath))
-            
-            if hashes['phash']:
-                photo.phash = hashes['phash']
-                photo.dhash = hashes['dhash']
-                
-                # Also extract image info and EXIF if not already done
-                if not photo.width:
-                    info = processor.get_image_info(Path(photo.filepath))
-                    if info:
-                        photo.width = info['width']
-                        photo.height = info['height']
-                        photo.format = info['format']
-                        photo.size = info['size']
-                
-                if not photo.date_taken:
-                    exif = processor.extract_exif(Path(photo.filepath))
-                    if exif:
-                        photo.date_taken = exif.get('date_taken')
-                        photo.camera_make = exif.get('camera_make')
-                        photo.camera_model = exif.get('camera_model')
-                        photo.lens_model = exif.get('lens_model')
-                        photo.iso = exif.get('iso')
-                        photo.aperture = exif.get('aperture')
-                        photo.shutter_speed = exif.get('shutter_speed')
-                        photo.focal_length = exif.get('focal_length')
-                        photo.gps_latitude = exif.get('gps_latitude')
-                        photo.gps_longitude = exif.get('gps_longitude')
-                        photo.gps_altitude = exif.get('gps_altitude')
-                
-                db.commit()
-                logger.info(f"Computed hashes for {photo.filename}")
-                
-        except Exception as e:
-            logger.error(f"Error computing hashes for {photo.filename}: {e}")
-            continue
-
-
 @router.post("/group/{folder_id}")
-async def group_similar_photos(
+def group_similar_photos(
     folder_id: int,
     threshold: int = 5,
     db: Session = Depends(get_db)
@@ -182,49 +164,19 @@ async def group_similar_photos(
             Photo.id.not_in(reviewed_photo_ids)
         ).all()
         
+        photos = [photo for photo in photos if _is_valid_hash(photo.phash)]
+        
         if len(photos) < 2:
             return {"message": "Not enough photos to compare"}
         
-        processor = ImageProcessor()
-        
-        # Compare all pairs and group similar ones
-        groups = []
-        processed = set()
-        
-        for i, photo1 in enumerate(photos):
-            if photo1.id in processed:
-                continue
-            
-            similar_photos = [photo1]
-            
-            for photo2 in photos[i+1:]:
-                if photo2.id in processed:
-                    continue
-                
-                distance = processor.compare_hashes(photo1.phash, photo2.phash)
-                
-                if distance <= threshold:
-                    similar_photos.append(photo2)
-                    processed.add(photo2.id)
-            
-            if len(similar_photos) > 1:
-                groups.append(similar_photos)
-                processed.add(photo1.id)
+        hashes = _hash_array(photos)
+        groups = _find_groups(hashes, threshold)
         
         # Save groups to database
         saved_groups = []
         
-        for group_photos in groups:
-            # Determine group type based on similarity
-            avg_distance = 0
-            comparisons = 0
-            
-            for i, p1 in enumerate(group_photos):
-                for p2 in group_photos[i+1:]:
-                    avg_distance += processor.compare_hashes(p1.phash, p2.phash)
-                    comparisons += 1
-            
-            avg_distance = avg_distance / comparisons if comparisons > 0 else 0
+        for members in groups:
+            avg_distance = _average_distance(hashes[members])
             
             # Classify group
             if avg_distance <= 3:
@@ -234,36 +186,31 @@ async def group_similar_photos(
             else:
                 group_type = 'similar'
             
-            # Create group in database
             similar_group = SimilarGroup(
                 folder_id=folder_id,
                 similarity_score=avg_distance,
                 group_type=group_type
             )
             db.add(similar_group)
-            db.commit()
-            db.refresh(similar_group)
+            db.flush()  # assigns similar_group.id
             
-            # Add photos to group
-            for photo in group_photos:
-                assoc = PhotoSimilarGroup(
-                    photo_id=photo.id,
-                    group_id=similar_group.id
-                )
-                db.add(assoc)
-            
-            db.commit()
+            db.add_all(
+                PhotoSimilarGroup(photo_id=photos[i].id, group_id=similar_group.id)
+                for i in members
+            )
             
             saved_groups.append({
                 "id": similar_group.id,
-                "photo_count": len(group_photos),
+                "photo_count": len(members),
                 "similarity_score": avg_distance,
                 "group_type": group_type
             })
         
+        db.commit()
+        
         return {
             "groups_found": len(saved_groups),
-            "photos_grouped": len(processed),
+            "photos_grouped": sum(len(members) for members in groups),
             "groups": saved_groups
         }
         
@@ -275,7 +222,7 @@ async def group_similar_photos(
 
 
 @router.get("/groups/{folder_id}")
-async def get_similar_groups(
+def get_similar_groups(
     folder_id: int,
     only_unreviewed: bool = False,
     db: Session = Depends(get_db)
@@ -320,7 +267,7 @@ async def get_similar_groups(
 
 
 @router.get("/group/{group_id}")
-async def get_group_details(group_id: int, db: Session = Depends(get_db)):
+def get_group_details(group_id: int, db: Session = Depends(get_db)):
     """Get detailed information about a specific group"""
     try:
         group = db.query(SimilarGroup).filter(SimilarGroup.id == group_id).first()
@@ -372,7 +319,7 @@ async def get_group_details(group_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/group/{group_id}/select/{photo_id}")
-async def select_best_photo(
+def select_best_photo(
     group_id: int,
     photo_id: int,
     delete_others: bool = False,
@@ -429,7 +376,7 @@ async def select_best_photo(
 
 
 @router.post("/group/{group_id}/skip")
-async def skip_group(group_id: int, db: Session = Depends(get_db)):
+def skip_group(group_id: int, db: Session = Depends(get_db)):
     """Mark group as reviewed without selecting a photo"""
     try:
         group = db.query(SimilarGroup).filter(SimilarGroup.id == group_id).first()

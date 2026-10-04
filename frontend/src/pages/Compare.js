@@ -14,6 +14,7 @@ function Compare() {
   const [loading, setLoading] = useState(true);
   const [selectedPhotos, setSelectedPhotos] = useState([]);
   const [photoVersions, setPhotoVersions] = useState({});
+  const [analysisProgress, setAnalysisProgress] = useState(null);
 
   useEffect(() => {
     loadGroups();
@@ -33,12 +34,30 @@ function Compare() {
       .filter((group) => group.photos.length > 1);
   };
 
+  // Grouping only sees photos with hashes, so wait for any pending analysis first
+  const waitForAnalysis = async () => {
+    const response = await similarAPI.analyze(folderId);
+    const { task_id: taskId } = response.data;
+    if (!taskId) {
+      return;
+    }
+
+    for (;;) {
+      const { data: task } = await photosAPI.getTaskStatus(taskId);
+      setAnalysisProgress(task.progress);
+      if (['completed', 'failed', 'cancelled'].includes(task.status)) {
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+  };
+
   const loadGroups = async () => {
     try {
       setLoading(true);
       let nextGroups = await fetchPendingGroups();
       if (nextGroups.length === 0) {
-        await similarAPI.analyze(folderId);
+        await waitForAnalysis();
         await similarAPI.group(folderId);
         nextGroups = await fetchPendingGroups();
       }
@@ -51,6 +70,7 @@ function Compare() {
       alert('Error loading similar photos. Make sure to analyze first.');
     } finally {
       setLoading(false);
+      setAnalysisProgress(null);
     }
   };
 
@@ -208,7 +228,10 @@ function Compare() {
     return (
       <div className="compare-loading">
         <Loader className="spinner" size={48} />
-        <p>Analyzing photos for similarities...</p>
+        <p>
+          Analyzing photos for similarities...
+          {analysisProgress !== null && ` ${analysisProgress}%`}
+        </p>
       </div>
     );
   }

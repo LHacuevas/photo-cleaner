@@ -33,7 +33,7 @@ class MetadataFilter(BaseModel):
 
 
 @router.post("/search")
-async def search_photos(filters: MetadataFilter, db: Session = Depends(get_db)):
+def search_photos(filters: MetadataFilter, db: Session = Depends(get_db)):
     """
     Search photos with multiple filters
     """
@@ -119,7 +119,7 @@ async def search_photos(filters: MetadataFilter, db: Session = Depends(get_db)):
 
 
 @router.get("/cameras/{folder_id}")
-async def get_camera_list(folder_id: int, db: Session = Depends(get_db)):
+def get_camera_list(folder_id: int, db: Session = Depends(get_db)):
     """Get list of unique cameras used in folder"""
     try:
         cameras = db.query(
@@ -153,7 +153,7 @@ async def get_camera_list(folder_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/date-range/{folder_id}")
-async def get_date_range(folder_id: int, db: Session = Depends(get_db)):
+def get_date_range(folder_id: int, db: Session = Depends(get_db)):
     """Get the date range of photos in folder"""
     try:
         photos_with_dates = db.query(Photo).filter(
@@ -180,7 +180,7 @@ async def get_date_range(folder_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/stats/{folder_id}")
-async def get_metadata_stats(folder_id: int, db: Session = Depends(get_db)):
+def get_metadata_stats(folder_id: int, db: Session = Depends(get_db)):
     """Get statistics about metadata in folder"""
     try:
         total_photos = db.query(Photo).filter(
@@ -221,7 +221,7 @@ async def get_metadata_stats(folder_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/by-month/{folder_id}")
-async def get_photos_by_month(folder_id: int, db: Session = Depends(get_db)):
+def get_photos_by_month(folder_id: int, db: Session = Depends(get_db)):
     """Group photos by year and month"""
     try:
         photos = db.query(Photo).filter(
@@ -268,7 +268,7 @@ async def get_photos_by_month(folder_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/gps-map/{folder_id}")
-async def get_gps_locations(folder_id: int, db: Session = Depends(get_db)):
+def get_gps_locations(folder_id: int, db: Session = Depends(get_db)):
     """Get GPS coordinates for map display"""
     try:
         photos = db.query(Photo).filter(

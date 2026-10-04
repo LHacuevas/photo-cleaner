@@ -9,12 +9,23 @@ from typing import List
 import logging
 
 from database import get_db, Folder, Photo
-from utils.image_processing import ImageProcessor
+from utils.analysis import enqueue_folder_analysis
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.webp'}
+WORKING_SUBFOLDERS = ['thumbs', 'web', 'cancellate', 'preferite']
+
+
+def _find_images(folder_path: Path) -> List[Path]:
+    """Images directly inside the folder (working subfolders are not scanned)"""
+    return sorted(
+        entry for entry in folder_path.iterdir()
+        if entry.is_file() and entry.suffix.lower() in IMAGE_EXTENSIONS
+    )
 
 
 class FolderCreate(BaseModel):
@@ -33,7 +44,7 @@ class FolderStats(BaseModel):
 
 
 @router.post("/scan")
-async def scan_folder(folder: FolderCreate, db: Session = Depends(get_db)):
+def scan_folder(folder: FolderCreate, db: Session = Depends(get_db)):
     """
     Scan a folder and create necessary subfolders
     Returns folder ID and initial stats
@@ -46,8 +57,7 @@ async def scan_folder(folder: FolderCreate, db: Session = Depends(get_db)):
             raise HTTPException(status_code=400, detail="Folder does not exist")
         
         # Create subfolders
-        subfolders = ['thumbs', 'web', 'cancellate', 'preferite']
-        for subfolder in subfolders:
+        for subfolder in WORKING_SUBFOLDERS:
             (folder_path / subfolder).mkdir(exist_ok=True)
         
         logger.info(f"Created subfolders in {folder_path}")
@@ -67,76 +77,23 @@ async def scan_folder(folder: FolderCreate, db: Session = Depends(get_db)):
             db.commit()
             db.refresh(folder_obj)
         
-        # Scan for images
-        image_extensions = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.webp'}
-        image_files = []
-        
-        for ext in image_extensions:
-            image_files.extend(folder_path.glob(f"*{ext}"))
-            image_files.extend(folder_path.glob(f"*{ext.upper()}"))
-        
-        # Add photos to database if not already there
-        new_photos = 0
-        for img_file in image_files:
-            # Skip if in subfolders
-            if any(sub in img_file.parts for sub in subfolders):
-                continue
-            
-            # Check if already in DB
-            existing_photo = db.query(Photo).filter(Photo.filepath == str(img_file)).first()
-            if not existing_photo:
-                try:
-                    # Extract image info and metadata
-                    processor = ImageProcessor()
-                    
-                    # Get basic image info
-                    image_info = processor.get_image_info(img_file)
-                    
-                    # Extract EXIF metadata
-                    exif_data = processor.extract_exif(img_file)
-                    
-                    # Compute perceptual hashes
-                    hashes = processor.compute_hashes(img_file)
-                    
-                    # Create photo record with all metadata
-                    photo = Photo(
-                        filename=img_file.name,
-                        filepath=str(img_file),
-                        folder_id=folder_obj.id,
-                        # Image dimensions
-                        width=image_info.get('width') if image_info else None,
-                        height=image_info.get('height') if image_info else None,
-                        size=image_info.get('size') if image_info else img_file.stat().st_size,
-                        format=image_info.get('format') if image_info else None,
-                        # Hashes for duplicate detection
-                        phash=hashes.get('phash'),
-                        dhash=hashes.get('dhash'),
-                        # EXIF metadata
-                        date_taken=exif_data.get('date_taken'),
-                        camera_make=exif_data.get('camera_make'),
-                        camera_model=exif_data.get('camera_model'),
-                        lens_model=exif_data.get('lens_model'),
-                        iso=exif_data.get('iso'),
-                        aperture=exif_data.get('aperture'),
-                        shutter_speed=exif_data.get('shutter_speed'),
-                        focal_length=exif_data.get('focal_length'),
-                        gps_latitude=exif_data.get('gps_latitude'),
-                        gps_longitude=exif_data.get('gps_longitude'),
-                        gps_altitude=exif_data.get('gps_altitude')
-                    )
-                    db.add(photo)
-                    new_photos += 1
-                    logger.info(f"Added photo with metadata: {img_file.name}")
-                    
-                except Exception as e:
-                    logger.warning(f"Skipping photo with error: {img_file.name} - {e}")
-                    continue
-
-            try:
-                db.commit()
-            except Exception as e:
-                db.rollback()
-                logger.error(f"Error committing photos: {e}")
+        # Register new images quickly; metadata and hashes are computed in the background
+        known_paths = {
+            filepath for (filepath,) in db.query(Photo.filepath).filter(Photo.folder_id == folder_obj.id)
+        }
+        new_photos = [
+            Photo(
+                filename=img_file.name,
+                filepath=str(img_file),
+                folder_id=folder_obj.id,
+                size=img_file.stat().st_size
+            )
+            for img_file in _find_images(folder_path)
+            if str(img_file) not in known_paths
+        ]
+        db.add_all(new_photos)
+        db.commit()
+        logger.info(f"Registered {len(new_photos)} new photos in {folder_path}")
         
         # Update folder stats
         folder_obj.total_photos = db.query(Photo).filter(
@@ -151,8 +108,9 @@ async def scan_folder(folder: FolderCreate, db: Session = Depends(get_db)):
             "name": folder_obj.name,
             "path": str(folder_path),
             "total_photos": folder_obj.total_photos,
-            "new_photos": new_photos,
-            "subfolders_created": True
+            "new_photos": len(new_photos),
+            "subfolders_created": True,
+            "analysis_task_id": enqueue_folder_analysis(folder_obj.id)
         }
         
     except HTTPException:
@@ -163,7 +121,7 @@ async def scan_folder(folder: FolderCreate, db: Session = Depends(get_db)):
 
 
 @router.get("/stats/{folder_id}")
-async def get_folder_stats(folder_id: int, db: Session = Depends(get_db)):
+def get_folder_stats(folder_id: int, db: Session = Depends(get_db)):
     """Get detailed stats for a folder"""
     try:
         folder = db.query(Folder).filter(Folder.id == folder_id).first()
@@ -216,7 +174,7 @@ async def get_folder_stats(folder_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/list")
-async def list_folders(db: Session = Depends(get_db)):
+def list_folders(db: Session = Depends(get_db)):
     """List all folders in database"""
     try:
         folders = db.query(Folder).all()

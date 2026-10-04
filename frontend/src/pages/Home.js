@@ -37,7 +37,10 @@ function Home() {
       setScanning(true);
       const response = await foldersAPI.scan(folderPath);
       
-      alert(`✅ Folder scanned successfully!\n\nPhotos found: ${response.data.total_photos}\nNew photos: ${response.data.new_photos}`);
+      const analysisNote = response.data.analysis_task_id
+        ? '\n\nDates, camera info and duplicate detection are being computed in the background.'
+        : '';
+      alert(`✅ Folder scanned successfully!\n\nPhotos found: ${response.data.total_photos}\nNew photos: ${response.data.new_photos}${analysisNote}`);
       
       // Navigate to gallery
       navigate(`/gallery/${response.data.folder_id}`);

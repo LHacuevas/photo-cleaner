@@ -1,14 +1,20 @@
 """
-Simple background task queue for long-running operations
+Background task queue for long-running operations.
+
+Tasks run in worker threads, never on the asyncio event loop, so the API stays
+responsive while FFmpeg/PIL work is in progress. Task functions are plain
+(sync) callables; if they accept a `task` argument they receive their Task to
+report progress and check for cancellation.
 """
 
-import asyncio
-import uuid
-import logging
 import inspect
+import logging
+import threading
+import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
-from typing import Dict, Callable, Any, Optional
 from enum import Enum
+from typing import Callable, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -22,9 +28,12 @@ class TaskStatus(str, Enum):
     CANCELLED = "cancelled"
 
 
+FINISHED_STATUSES = (TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED)
+
+
 class Task:
     """Represents a background task"""
-    
+
     def __init__(self, task_id: str, name: str, func: Callable, args: list = None, kwargs: dict = None):
         self.id = task_id
         self.name = name
@@ -38,7 +47,15 @@ class Task:
         self.created_at = datetime.utcnow()
         self.started_at = None
         self.completed_at = None
-    
+
+    @property
+    def is_cancelled(self) -> bool:
+        return self.status == TaskStatus.CANCELLED
+
+    def set_progress(self, done: int, total: int):
+        if total > 0:
+            self.progress = int(done / total * 100)
+
     def to_dict(self):
         """Convert task to dictionary"""
         return {
@@ -55,122 +72,105 @@ class Task:
 
 
 class BackgroundTaskQueue:
-    """Simple in-memory task queue for background operations"""
-    
-    def __init__(self, max_workers: int = 3):
+    """In-memory task queue backed by a thread pool"""
+
+    def __init__(self, max_workers: int = 3, keep_last_n: int = 100):
         self.tasks: Dict[str, Task] = {}
-        self.max_workers = max_workers
-        self.running_tasks = set()
-        self.loop = None
-    
+        self.keep_last_n = keep_last_n
+        self._executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="task")
+        self._lock = threading.Lock()
+
     def enqueue(self, name: str, func: Callable, args: list = None, kwargs: dict = None) -> str:
         """
-        Enqueue a task
-        
+        Enqueue a task. Safe to call from any thread.
+
         Returns:
             Task ID
         """
         task_id = str(uuid.uuid4())
         task = Task(task_id, name, func, args, kwargs)
-        self.tasks[task_id] = task
-        
+        with self._lock:
+            self.tasks[task_id] = task
+            self._cleanup_old_tasks()
+
         logger.info(f"Task enqueued: {name} (ID: {task_id})")
-        
-        # Try to run task immediately
-        asyncio.create_task(self._run_task(task_id))
-        
+        self._executor.submit(self._run_task, task)
+
         return task_id
-    
-    async def _run_task(self, task_id: str):
-        """Run a task (internal)"""
-        task = self.tasks[task_id]
-        
-        # Wait if at max workers
-        while len(self.running_tasks) >= self.max_workers:
-            await asyncio.sleep(0.5)
-        
-        self.running_tasks.add(task_id)
+
+    def _run_task(self, task: Task):
+        """Run a task in a worker thread (internal)"""
+        if task.is_cancelled:
+            return
+
         task.status = TaskStatus.RUNNING
         task.started_at = datetime.utcnow()
-        
+
         try:
-            logger.info(f"Task started: {task.name} (ID: {task_id})")
-            
-            # Run the async or sync function
+            logger.info(f"Task started: {task.name} (ID: {task.id})")
+
             kwargs = dict(task.kwargs)
             if "task" in inspect.signature(task.func).parameters:
                 kwargs["task"] = task
 
-            if asyncio.iscoroutinefunction(task.func):
-                result = await task.func(*task.args, **kwargs)
-            else:
-                result = task.func(*task.args, **kwargs)
-            
-            task.result = result
-            task.status = TaskStatus.COMPLETED
-            task.progress = 100
-            
-            logger.info(f"Task completed: {task.name} (ID: {task_id})")
-        
+            task.result = task.func(*task.args, **kwargs)
+
+            if not task.is_cancelled:
+                task.status = TaskStatus.COMPLETED
+                task.progress = 100
+            logger.info(f"Task {task.status.value}: {task.name} (ID: {task.id})")
+
         except Exception as e:
             task.error = str(e)
             task.status = TaskStatus.FAILED
-            logger.error(f"Task failed: {task.name} (ID: {task_id}): {e}")
-        
+            logger.exception(f"Task failed: {task.name} (ID: {task.id})")
+
         finally:
             task.completed_at = datetime.utcnow()
-            self.running_tasks.remove(task_id)
-    
+
     def get_task(self, task_id: str) -> Optional[Task]:
         """Get task by ID"""
         return self.tasks.get(task_id)
-    
+
     def get_task_status(self, task_id: str) -> Optional[Dict]:
         """Get task status as dictionary"""
         task = self.get_task(task_id)
         return task.to_dict() if task else None
-    
+
     def cancel_task(self, task_id: str) -> bool:
-        """Cancel a pending or running task"""
+        """
+        Cancel a task: pending tasks never start, running tasks stop at
+        their next `task.is_cancelled` check.
+        """
         task = self.get_task(task_id)
-        
-        if not task:
+
+        if not task or task.status in FINISHED_STATUSES:
             return False
-        
-        if task.status in [TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED]:
-            return False
-        
+
         task.status = TaskStatus.CANCELLED
-        logger.info(f"Task cancelled: {task.name} (ID: {task_id})")
-        
+        logger.info(f"Task cancelled: {task.name} (ID: {task.id})")
+
         return True
-    
+
     def list_tasks(self, status: Optional[TaskStatus] = None) -> list:
         """List all tasks, optionally filtered by status"""
         tasks = list(self.tasks.values())
-        
+
         if status:
             tasks = [t for t in tasks if t.status == status]
-        
+
         return [t.to_dict() for t in tasks]
-    
-    def cleanup_old_tasks(self, keep_last_n: int = 100):
-        """Remove old completed tasks to free memory"""
-        if len(self.tasks) <= keep_last_n:
+
+    def _cleanup_old_tasks(self):
+        """Forget the oldest finished tasks beyond `keep_last_n` (caller holds the lock)"""
+        finished = [t for t in self.tasks.values() if t.status in FINISHED_STATUSES]
+        excess = len(finished) - self.keep_last_n
+        if excess <= 0:
             return
-        
-        # Sort by completed_at (oldest first)
-        completed = [
-            (tid, t) for tid, t in self.tasks.items()
-            if t.status in [TaskStatus.COMPLETED, TaskStatus.FAILED]
-        ]
-        completed.sort(key=lambda x: x[1].completed_at or datetime.utcnow())
-        
-        # Remove oldest
-        to_remove = len(completed) - keep_last_n
-        for task_id, _ in completed[:to_remove]:
-            del self.tasks[task_id]
-            logger.info(f"Cleaned up old task: {task_id}")
+
+        finished.sort(key=lambda t: t.completed_at or t.created_at)
+        for task in finished[:excess]:
+            del self.tasks[task.id]
 
 
 # Global task queue instance
