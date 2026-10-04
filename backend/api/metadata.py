@@ -2,11 +2,11 @@
 Metadata API - Search and filter photos by EXIF data
 """
 
-from fastapi import APIRouter, HTTPException, Depends, Query
+from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, or_, between
-from typing import List, Optional
-from datetime import datetime, date
+from sqlalchemy import and_, or_
+from typing import Optional
+from datetime import datetime, timedelta
 import logging
 
 from database import get_db, Photo
@@ -42,10 +42,15 @@ def search_photos(filters: MetadataFilter, db: Session = Depends(get_db)):
         
         # Date range filter
         if filters.date_from:
-            query = query.filter(Photo.date_taken >= filters.date_from)
-        
+            query = query.filter(Photo.date_taken >= datetime.fromisoformat(filters.date_from))
+
         if filters.date_to:
-            query = query.filter(Photo.date_taken <= filters.date_to)
+            date_to = datetime.fromisoformat(filters.date_to)
+            if len(filters.date_to) == 10:
+                # A plain date includes that whole day
+                query = query.filter(Photo.date_taken < date_to + timedelta(days=1))
+            else:
+                query = query.filter(Photo.date_taken <= date_to)
         
         # Camera filters
         if filters.camera_make:
@@ -55,17 +60,17 @@ def search_photos(filters: MetadataFilter, db: Session = Depends(get_db)):
             query = query.filter(Photo.camera_model.like(f"%{filters.camera_model}%"))
         
         # ISO range
-        if filters.min_iso:
+        if filters.min_iso is not None:
             query = query.filter(Photo.iso >= filters.min_iso)
         
-        if filters.max_iso:
+        if filters.max_iso is not None:
             query = query.filter(Photo.iso <= filters.max_iso)
         
         # Aperture range
-        if filters.min_aperture:
+        if filters.min_aperture is not None:
             query = query.filter(Photo.aperture >= filters.min_aperture)
         
-        if filters.max_aperture:
+        if filters.max_aperture is not None:
             query = query.filter(Photo.aperture <= filters.max_aperture)
         
         # GPS filter
@@ -158,6 +163,7 @@ def get_date_range(folder_id: int, db: Session = Depends(get_db)):
     try:
         photos_with_dates = db.query(Photo).filter(
             Photo.folder_id == folder_id,
+            Photo.is_deleted == False,
             Photo.date_taken != None
         ).all()
         
@@ -188,19 +194,23 @@ def get_metadata_stats(folder_id: int, db: Session = Depends(get_db)):
             Photo.is_deleted == False
         ).count()
         
+        # Same population as total_photos, so coverages never exceed 100%
         photos_with_exif = db.query(Photo).filter(
             Photo.folder_id == folder_id,
+            Photo.is_deleted == False,
             Photo.date_taken != None
         ).count()
-        
+
         photos_with_gps = db.query(Photo).filter(
             Photo.folder_id == folder_id,
+            Photo.is_deleted == False,
             Photo.gps_latitude != None,
             Photo.gps_longitude != None
         ).count()
-        
+
         unique_cameras = db.query(Photo.camera_model).filter(
             Photo.folder_id == folder_id,
+            Photo.is_deleted == False,
             Photo.camera_model != None
         ).distinct().count()
         

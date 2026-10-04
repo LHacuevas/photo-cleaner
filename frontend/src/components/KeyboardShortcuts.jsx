@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { X } from 'lucide-react';
 import './KeyboardShortcuts.css';
 
@@ -7,8 +7,8 @@ function KeyboardShortcuts() {
 
   useEffect(() => {
     const handleKeyPress = (e) => {
-      // Open on '?' or 'h' key
-      if ((e.key === '?' || e.key === 'h' || e.key === 'H') && !isOpen) {
+      // Open on '?' ('h' is the gallery's flip shortcut)
+      if (e.key === '?' && !isOpen) {
         e.preventDefault();
         setIsOpen(true);
       }
@@ -52,11 +52,23 @@ function KeyboardShortcuts() {
               </div>
               <div className="shortcut-item">
                 <kbd>D</kbd>
-                <span>Delete photo</span>
+                <span>Delete photo (also Del)</span>
               </div>
               <div className="shortcut-item">
-                <kbd>I</kbd>
-                <span>Toggle EXIF panel</span>
+                <kbd>R</kbd>
+                <span>Rotate 90° clockwise</span>
+              </div>
+              <div className="shortcut-item">
+                <kbd>H</kbd>
+                <span>Flip horizontally</span>
+              </div>
+              <div className="shortcut-item">
+                <kbd>V</kbd>
+                <span>Switch original / web version</span>
+              </div>
+              <div className="shortcut-item">
+                <kbd>Ctrl+Click</kbd>
+                <span>Select thumbnails for batch actions</span>
               </div>
             </div>
           </div>
@@ -67,10 +79,6 @@ function KeyboardShortcuts() {
               <div className="shortcut-item">
                 <kbd>1-9</kbd>
                 <span>Select photo by number</span>
-              </div>
-              <div className="shortcut-item">
-                <kbd>D</kbd>
-                <span>Delete selected</span>
               </div>
               <div className="shortcut-item">
                 <kbd>S</kbd>
@@ -91,7 +99,7 @@ function KeyboardShortcuts() {
             <h3>General</h3>
             <div className="shortcuts-list">
               <div className="shortcut-item">
-                <kbd>? H</kbd>
+                <kbd>?</kbd>
                 <span>Show this help</span>
               </div>
               <div className="shortcut-item">
@@ -103,7 +111,7 @@ function KeyboardShortcuts() {
         </div>
 
         <div className="shortcuts-footer">
-          <p>Press <kbd>?</kbd> or <kbd>H</kbd> anytime to show this help</p>
+          <p>Press <kbd>?</kbd> anytime to show this help</p>
         </div>
       </div>
     </div>

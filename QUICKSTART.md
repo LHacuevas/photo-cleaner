@@ -1,133 +1,57 @@
-# ⚡ Photo Cleaner - Quick Start
+# 🚀 Inicio rápido
 
-## 🚀 5-Minute Setup (Windows)
+## 1. Requisitos (una sola vez)
 
-### Step 1: Install Prerequisites (One-Time)
+1. **Python 3.12:** <https://www.python.org/downloads/> (marca «Add Python to PATH»)
+2. **Node.js 20 o superior:** <https://nodejs.org/>
+3. **FFmpeg:**
 
-1. **Python 3.9+** → [Download](https://www.python.org/downloads/)
-   - During installation, check "Add Python to PATH"
-
-2. **Node.js 16+** → [Download](https://nodejs.org/)
-   - Download LTS version
-   - Default installation is fine
-
-3. **FFmpeg** → [Download](https://www.gyan.dev/ffmpeg/builds/)
-   - Download "ffmpeg-release-essentials.zip"
-   - Extract to `C:\ffmpeg`
-   - Add `C:\ffmpeg\bin` to PATH:
-     - Search "Environment Variables" in Windows
-     - Edit "Path" under System Variables
-     - Click "New" → Add `C:\ffmpeg\bin`
-
-### Step 2: Run Photo Cleaner
-
-**Double-click:** `start.bat`
-
-That's it! The app will:
-- Install dependencies automatically (first time only)
-- Start backend server
-- Start frontend server
-- Open in your browser
-
----
-
-## 🎮 First Use
-
-1. **Open** http://localhost:3000 (opens automatically)
-
-2. **Enter folder path**
-   ```
-   Example: C:\Users\YourName\Pictures\Vacation2024
+   ```bat
+   winget install Gyan.FFmpeg
    ```
 
-3. **Click "Scan Folder"**
+   El backend lo encuentra solo, ya esté en el PATH o instalado con winget o en Program Files. Si lo tienes en otra ruta, indícala en `backend/.env` con `PHOTO_CLEANER_FFMPEG=...`.
 
-4. **Click "Generate Thumbnails"**
+## 2. Arrancar
 
-5. **Start organizing!**
-   - Press → and ← to navigate
-   - Press F to favorite
-   - Press D to delete
-   - Press Space for compare mode
+Doble clic en **`start.bat`** (o ejecútalo desde una consola en la raíz del proyecto).
 
----
+La primera vez tarda unos minutos porque instala las dependencias. Se abren dos ventanas, backend y frontend, y el navegador en <http://localhost:3000>.
 
-## 📂 Your Folder Structure After Scan
+Para comprobar que todo está bien, abre <http://localhost:8000/api/health>. Debe responder `"database": "connected"` y `"ffmpeg": "available"`.
 
+## 3. Primer uso
+
+1. Escribe la ruta de una carpeta de fotos, por ejemplo `C:\Fotos\Vacaciones2024`.
+2. Marca **Include subfolders** si quieres incluir sus subcarpetas.
+3. Pulsa **Scan Folder**. Las fotos aparecen enseguida; la fecha, la cámara y la detección de duplicados se calculan en segundo plano.
+4. En la galería, pulsa **Generate Thumbnails**. Con archivos grandes, conviene generar también las versiones web (botón del monitor) para navegar con fluidez.
+5. Revisa con el teclado: `→` siguiente, `F` favorita, `D` descartar, `R` rotar. Pulsa `?` para ver todos los atajos.
+6. Pulsa **Find Duplicates** para revisar duplicados y ráfagas grupo a grupo.
+
+Nada se borra de verdad: lo descartado está en la subcarpeta `cancellate/` y se puede restaurar.
+
+## Arranque manual (sin `start.bat`)
+
+```bat
+REM Backend
+cd backend
+..\.venv\Scripts\python.exe main.py
+
+REM Frontend (en otra consola)
+cd frontend
+npm install
+npm start
 ```
-YourFolder/
-├── IMG_001.jpg         ← Originals (untouched)
-├── IMG_002.jpg
-│
-├── thumbs/            ← Auto-created
-├── web/               ← Auto-created
-├── cancellate/        ← Auto-created
-└── preferite/         ← Auto-created
-```
 
----
+## Problemas frecuentes
 
-## 🔑 Keyboard Shortcuts
+| Problema | Solución |
+| --- | --- |
+| `/api/health` dice `"ffmpeg": "missing"` | Instala FFmpeg o configura `PHOTO_CLEANER_FFMPEG` en `backend/.env` |
+| No aparecen fechas ni cámara tras escanear | El análisis sigue en segundo plano; vuelve a abrir la foto en unos segundos |
+| Puerto 8000 ocupado | Cambia `PHOTO_CLEANER_PORT` en `backend/.env` **y** crea `frontend/.env.local` con `VITE_API_URL=http://localhost:<puerto>/api` para que el frontend lo encuentre |
+| Puerto 3000 ocupado | Vite elige automáticamente otro puerto libre; mira la ventana del frontend |
+| Has borrado fotos a mano en el explorador | Vuelve a escanear la carpeta: las fotos que ya no existen desaparecen del índice |
 
-### Navigation
-- `→` Next photo
-- `←` Previous photo
-- `Home` First photo
-- `End` Last photo
-
-### Actions
-- `F` Toggle favorite
-- `D` Delete (non-destructive)
-- `Space` Compare mode
-- `Esc` Exit compare mode
-
-### Compare Mode
-- `1` `2` `3` `4` Select best photo
-- `D` Delete others
-- `S` Skip group
-
----
-
-## ❓ Quick Troubleshooting
-
-### "FFmpeg not found"
-→ Install FFmpeg and add to PATH (see Step 1.3 above)
-
-### "Python not found"
-→ Install Python and check "Add to PATH" (see Step 1.1 above)
-
-### Port already in use
-→ Close other applications using ports 8000 or 3000
-
-### Thumbnails not generating
-→ Check FFmpeg: open CMD and type `ffmpeg -version`
-
----
-
-## 📚 Learn More
-
-- **User Guide:** `docs/USER_GUIDE.md` - Complete workflow
-- **Development:** `docs/DEVELOPMENT.md` - Technical details
-- **API Docs:** http://localhost:8000/docs (when running)
-
----
-
-## 🆘 Need Help?
-
-- Check `docs/USER_GUIDE.md` for detailed instructions
-- Open an issue on GitHub
-- Read FAQ in User Guide
-
----
-
-## ⚡ Power User Tips
-
-1. **Generate thumbnails first** - Makes everything 10× faster
-2. **Use compare mode** - Clean photo bursts in seconds
-3. **Keyboard shortcuts** - Much faster than clicking
-4. **Search by date** - Find specific photo sets quickly
-5. **Backup your database** - `backend/photo_cleaner.db`
-
----
-
-**Happy organizing! 📸✨**
+Más detalle en la [guía de usuario](docs/USER_GUIDE.md).

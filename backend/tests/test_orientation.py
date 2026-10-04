@@ -7,8 +7,9 @@ import itertools
 import piexif
 import pytest
 from PIL import Image, ImageOps
+from PIL.PngImagePlugin import PngInfo
 
-from conftest import EXIF_DATE, make_thumb
+from conftest import EXIF_DATE, make_scene, make_thumb, wait_for_task
 from utils.image_processing import FLIPS, ROTATIONS, _ORIENTATION_TRANSPOSE, _compose_orientation
 
 ALL_OPS = list(ROTATIONS.values()) + list(FLIPS.values())
@@ -98,15 +99,69 @@ def test_rotate_transforms_thumb_and_favorite_copy(client, scanned):
     assert favorite_exif["0th"][piexif.ImageIFD.Orientation] == 8
 
 
-def test_rotate_non_jpeg_is_rejected_without_changes(client, scanned):
+def test_rotate_png_keeps_exact_pixels_and_text(client, scanned):
     folder, _, ids = scanned
-    before = (folder / "d.png").read_bytes()
+    pnginfo = PngInfo()
+    pnginfo.add_text("Comment", "keep me")
+    with Image.open(folder / "d.png") as img:
+        original = img.copy()
+    original.save(folder / "d.png", pnginfo=pnginfo)
 
     response = client.post(f"/api/photos/rotate/{ids['d.png']}", params={"degrees": 90})
 
+    assert response.status_code == 200
+    with Image.open(folder / "d.png") as img:
+        assert img.format == "PNG"
+        assert img.text["Comment"] == "keep me"
+        assert img.tobytes() == original.transpose(ROTATIONS[90]).tobytes()
+    photo = client.get(f"/api/photos/get/{ids['d.png']}").json()
+    assert (photo["width"], photo["height"]) == (400, 600)
+
+
+def _scan_extra(client, folder, filename, save):
+    save(folder / filename)
+    response = client.post("/api/folders/scan", json={"path": str(folder)}).json()
+    wait_for_task(client, response["analysis_task_id"])
+    photos = client.get(f"/api/photos/list/{response['folder_id']}").json()["photos"]
+    return next(p["id"] for p in photos if p["filename"] == filename)
+
+
+@pytest.mark.parametrize("filename,save", [
+    ("lossy.webp", lambda path: make_scene().save(path, quality=80)),
+    ("animated.gif", lambda path: make_scene().save(
+        path, save_all=True, append_images=[make_scene(30)], duration=100, loop=0
+    )),
+])
+def test_rotate_lossy_or_animated_is_rejected_without_changes(client, photo_folder, filename, save):
+    photo_id = _scan_extra(client, photo_folder, filename, save)
+    before = (photo_folder / filename).read_bytes()
+
+    response = client.post(f"/api/photos/rotate/{photo_id}", params={"degrees": 90})
+
     assert response.status_code == 400
-    assert "JPEG" in response.json()["detail"]
-    assert (folder / "d.png").read_bytes() == before
+    assert (photo_folder / filename).read_bytes() == before
+
+
+def test_rotate_lossless_webp(client, photo_folder):
+    photo_id = _scan_extra(client, photo_folder, "lossless.webp", lambda path: make_scene().save(path, lossless=True))
+    with Image.open(photo_folder / "lossless.webp") as img:
+        original = img.convert("RGB")
+
+    response = client.post(f"/api/photos/flip/{photo_id}", params={"direction": "vertical"})
+
+    assert response.status_code == 200
+    with Image.open(photo_folder / "lossless.webp") as img:
+        assert img.convert("RGB").tobytes() == original.transpose(FLIPS["vertical"]).tobytes()
+
+
+def test_rotate_updates_hash_and_dimensions(client, scanned):
+    _, _, ids = scanned
+    before = client.get(f"/api/photos/get/{ids['a.jpg']}").json()
+
+    client.post(f"/api/photos/rotate/{ids['a.jpg']}", params={"degrees": 90})
+
+    after = client.get(f"/api/photos/get/{ids['a.jpg']}").json()
+    assert (after["width"], after["height"]) == (before["height"], before["width"])
 
 
 @pytest.mark.parametrize("endpoint,params", [

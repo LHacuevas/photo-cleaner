@@ -219,3 +219,12 @@
     grid-template-columns: 1fr;
   }
 }
+
+.scan-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: #ccc;
+  cursor: pointer;
+  user-select: none;
+}

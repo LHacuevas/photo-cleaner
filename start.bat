@@ -1,43 +1,37 @@
 @echo off
 echo ========================================
-echo   Photo Cleaner - Quick Start
+echo   Photo Cleaner - Inicio rapido
 echo ========================================
 echo.
 
-REM Check if backend venv exists
+REM Entorno virtual de Python
 if not exist ".venv" (
-    echo [1/4] Creating Python virtual environment...
+    echo [1/4] Creando entorno virtual de Python...
     python -m venv .venv
-    call .venv\Scripts\activate
-    pip install -r backend\requirements.txt
-) else (
-    echo [1/4] Virtual environment already exists ✓
 )
 
-REM Check if node_modules exists
-if not exist "frontend\node_modules" (
-    echo [2/4] Installing Node dependencies...
-    cd frontend
-    call npm install
-    cd ..
-) else (
-    echo [2/4] Node dependencies already installed ✓
-)
+REM Siempre se sincronizan las dependencias: es rapido si ya estan al dia
+REM y evita errores tras actualizar el proyecto.
+echo [2/4] Comprobando dependencias...
+call .venv\Scripts\python.exe -m pip install --quiet --disable-pip-version-check -r backend\requirements.txt
+pushd frontend
+call npm install --no-audit --no-fund --loglevel=error
+popd
 
-echo [3/4] Starting backend server...
-start "Photo Cleaner Backend" cmd /k "call .venv\Scripts\activate && cd backend && python main.py"
+echo [3/4] Arrancando el backend...
+start "Photo Cleaner Backend" cmd /k "cd backend && ..\.venv\Scripts\python.exe main.py"
 
 timeout /t 3 /nobreak >nul
 
-echo [4/4] Starting frontend...
+echo [4/4] Arrancando el frontend...
 start "Photo Cleaner Frontend" cmd /k "cd frontend && npm start"
 
 echo.
 echo ========================================
-echo   Photo Cleaner is starting!
+echo   Photo Cleaner se esta iniciando
 echo   Backend:  http://localhost:8000
-echo   Frontend: http://localhost:3001
+echo   Frontend: http://localhost:3000
 echo ========================================
 echo.
-echo Press any key to exit this window...
+echo Pulsa una tecla para cerrar esta ventana...
 pause >nul

@@ -3,21 +3,21 @@ Photos API - Get photos, navigate, mark favorites, delete
 """
 
 from fastapi import APIRouter, HTTPException, Depends, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from sqlalchemy.orm import Session
-from pathlib import Path
 from typing import List, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import logging
 import os
 
 from database import get_db, SessionLocal, Photo
-from utils.image_processing import ImageProcessor, ROTATIONS, FLIPS
-from utils.task_queue import task_queue
+from utils.image_processing import ImageProcessor, ROTATIONS, FLIPS, needs_jpeg_preview
+from utils.task_queue import task_queue, TaskStatus
 from utils.photo_files import (
     get_original_path,
     get_thumb_path,
     get_web_path,
+    get_web_file_details,
     get_favorite_path,
     move_photo_variants,
     refresh_photo_file_state,
@@ -68,28 +68,10 @@ def _get_missing_generated_photos(db: Session, folder_id: int, variant: str) -> 
     return missing
 
 
-def _get_web_file_details(photo: Photo) -> dict:
-    """Return file metadata for the generated web version if it exists."""
-    web_path = get_web_path(photo)
-    if not web_path.exists():
-        return {
-            "web_size": None,
-            "web_width": None,
-            "web_height": None
-        }
-
-    web_info = ImageProcessor.get_image_info(web_path) or {}
-    return {
-        "web_size": web_info.get("size", web_path.stat().st_size),
-        "web_width": web_info.get("width"),
-        "web_height": web_info.get("height")
-    }
-
-
 def _serialize_photo(photo: Photo) -> dict:
     """Serialize a photo model for API responses."""
     has_thumb, has_web = _sync_generated_flags(photo)
-    web_details = _get_web_file_details(photo) if has_web else {
+    web_details = get_web_file_details(photo) if has_web else {
         "web_size": None,
         "web_width": None,
         "web_height": None
@@ -133,37 +115,11 @@ def _serialize_photo_summary(photo: Photo) -> dict:
     }
 
 
-class PhotoResponse(BaseModel):
-    id: int
-    filename: str
-    filepath: str
-    width: Optional[int]
-    height: Optional[int]
-    size: int
-    is_favorite: bool
-    is_deleted: bool
-    has_thumb: bool
-    has_web: bool
-    date_taken: Optional[str]
-    camera_model: Optional[str]
-    
-    class Config:
-        from_attributes = True
-
 class BatchOperationRequest(BaseModel):
     """Batch operation request"""
     operation: str  # 'favorite', 'unfavorite', 'delete', 'restore'
     photo_ids: List[int]
 
-
-class BatchOperationResponse(BaseModel):
-    """Batch operation response"""
-    operation: str
-    total: int
-    success: int
-    errors: int
-    failed_ids: List[int] = []
-    message: str
 
 @router.get("/list/{folder_id}")
 def list_photos(
@@ -217,8 +173,10 @@ def get_photo(photo_id: int, db: Session = Depends(get_db)):
         
         if not photo:
             raise HTTPException(status_code=404, detail="Photo not found")
-        
-        return _serialize_photo(photo)
+
+        details = _serialize_photo(photo)
+        db.commit()  # keep has_thumb/has_web synced with the filesystem
+        return details
         
     except HTTPException:
         raise
@@ -236,23 +194,29 @@ def get_photo_file(photo_id: int, thumb: bool = False, prefer_web: bool = False,
         if not photo:
             raise HTTPException(status_code=404, detail="Photo not found")
         
+        # Derivatives of TIFF/HEIC/RAW are JPEG files that keep the original name
+        derivative_type = "image/jpeg" if needs_jpeg_preview(photo.filename) else None
+
         if thumb:
             thumb_path = get_thumb_path(photo)
             if thumb_path.exists():
-                return FileResponse(thumb_path)
+                return FileResponse(thumb_path, media_type=derivative_type)
             else:
                 raise HTTPException(status_code=404, detail="Thumbnail not found")
         else:
-            if prefer_web:
-                web_path = get_web_path(photo)
-                if web_path.exists():
-                    return FileResponse(web_path)
-            
+            web_path = get_web_path(photo)
+            if web_path.exists() and (prefer_web or derivative_type):
+                return FileResponse(web_path, media_type=derivative_type)
+
             original_path = get_original_path(photo)
-            if original_path.exists():
-                return FileResponse(original_path)
-            else:
+            if not original_path.exists():
                 raise HTTPException(status_code=404, detail="Photo file not found")
+
+            if derivative_type:
+                # Browsers can't display TIFF/HEIC/RAW: render a JPEG preview on the fly
+                return Response(ImageProcessor.render_jpeg(original_path), media_type="image/jpeg")
+
+            return FileResponse(original_path)
         
     except HTTPException:
         raise
@@ -613,10 +577,10 @@ def cancel_task(task_id: str):
 
 
 @router.get("/tasks")
-def list_tasks(status: Optional[str] = None):
-    """List all background tasks"""
+def list_tasks(status: Optional[TaskStatus] = None):
+    """List all background tasks, optionally only those with `status`"""
     try:
-        tasks = task_queue.list_tasks()
+        tasks = task_queue.list_tasks(status)
         
         return {
             "total": len(tasks),
@@ -632,28 +596,42 @@ def list_tasks(status: Optional[str] = None):
 
 def _transform_photo(photo: Photo, op) -> None:
     """
-    Rotate/flip a photo without touching the original's pixels: the original
-    (and its preferite/ copy) only get a new EXIF Orientation tag, while the
-    generated thumb/web versions are re-encoded.
+    Rotate/flip a photo without losing data: JPEG originals (and their preferite/
+    copy) only get a new EXIF Orientation tag; lossless formats are re-saved with
+    the exact same pixels. Generated thumb/web versions are re-encoded.
     """
     original_path = get_original_path(photo)
     if not original_path.exists():
         raise HTTPException(status_code=404, detail="Photo file not found")
 
-    if original_path.suffix.lower() not in ('.jpg', '.jpeg'):
-        raise HTTPException(status_code=400, detail="Rotate/flip is only supported for JPEG photos")
+    if original_path.suffix.lower() in ('.jpg', '.jpeg'):
+        transform_original = ImageProcessor.transform_original
+    elif ImageProcessor.can_transform_losslessly(original_path):
+        transform_original = ImageProcessor.transform_lossless
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="Rotate/flip is only supported for JPEG and lossless still images (PNG, BMP, TIFF, GIF, lossless WebP)"
+        )
 
-    if not ImageProcessor.transform_original(original_path, op):
+    if not transform_original(original_path, op):
         raise HTTPException(status_code=500, detail="Failed to update photo orientation")
 
     favorite_path = get_favorite_path(photo)
     if favorite_path.exists():
-        ImageProcessor.transform_original(favorite_path, op)
+        transform_original(favorite_path, op)
 
     for derivative_path in (get_thumb_path(photo), get_web_path(photo)):
         if derivative_path.exists() and not ImageProcessor.transform_derivative(derivative_path, op):
             # Derivatives can be regenerated: drop it rather than keep a wrongly oriented one
             derivative_path.unlink(missing_ok=True)
+
+    # Hashes and dimensions describe the photo as displayed, which just changed
+    info = ImageProcessor.get_image_info(original_path)
+    if info:
+        photo.width, photo.height = info['width'], info['height']
+    hashes = ImageProcessor.compute_hashes(original_path)
+    photo.phash, photo.dhash = hashes['phash'], hashes['dhash']
 
     refresh_photo_file_state(photo)
 
@@ -665,7 +643,7 @@ def rotate_photo(
     db: Session = Depends(get_db)
 ):
     """
-    Rotate a photo (JPEG only, lossless on the original)
+    Rotate a photo without losing data (JPEG and lossless still formats, see _transform_photo)
     
     Parameters:
     - degrees: Rotation angle (90, -90, 180, 270)
@@ -704,7 +682,7 @@ def flip_photo(
     db: Session = Depends(get_db)
 ):
     """
-    Flip a photo (JPEG only, lossless on the original)
+    Flip a photo without losing data (JPEG and lossless still formats, see _transform_photo)
     
     Parameters:
     - direction: 'horizontal' or 'vertical'

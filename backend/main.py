@@ -3,25 +3,24 @@ Photo Cleaner - Backend API
 Main FastAPI application
 """
 
-from fastapi import FastAPI, HTTPException, UploadFile, File
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
 from fastapi.exceptions import RequestValidationError
-from pathlib import Path
-from typing import List, Optional
+from sqlalchemy import text
 import uvicorn
 import logging
-import os
 
+import config
 from api import photos, folders, metadata, similar
-from database import init_db
+from database import init_db, engine
 from middleware import (
     global_exception_handler,
     validation_exception_handler,
     LoggingMiddleware,
-    ErrorResponse
 )
+from utils.image_processing import ImageProcessor
 
 # Logging
 logging.basicConfig(
@@ -30,31 +29,32 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Bring the database schema up to date before serving requests"""
+    logger.info("Starting Photo Cleaner Backend...")
+    init_db()
+    logger.info("Database initialized")
+    yield
+
+
 # FastAPI App
 app = FastAPI(
     title="Photo Cleaner API",
     description="Backend API for photo management and organization",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan
 )
 
 # Add middleware
 app.add_middleware(LoggingMiddleware)
 
-# CORS - Allow frontend to connect
+# CORS - Allow the local frontend to connect (any port unless PHOTO_CLEANER_CORS_ORIGINS is set)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://localhost:3001", 
-        "http://localhost:3002",
-        "http://localhost:3003",
-        "http://localhost:3004",
-        "http://localhost:3005",
-        "http://127.0.0.1:3000",
-        "http://127.0.0.1:3001",
-        "http://127.0.0.1:3002",
-        "http://127.0.0.1:3003",
-    ],
+    allow_origins=config.CORS_ORIGINS,
+    allow_origin_regex=None if config.CORS_ORIGINS else config.LOCALHOST_ORIGIN_REGEX,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -71,16 +71,8 @@ app.include_router(metadata.router, prefix="/api/metadata", tags=["metadata"])
 app.include_router(similar.router, prefix="/api/similar", tags=["similar"])
 
 
-@app.on_event("startup")
-async def startup_event():
-    """Initialize database on startup"""
-    logger.info("Starting Photo Cleaner Backend...")
-    await init_db()
-    logger.info("Database initialized")
-
-
 @app.get("/")
-async def root():
+def root():
     """Health check endpoint"""
     return {
         "status": "running",
@@ -90,21 +82,30 @@ async def root():
 
 
 @app.get("/api/health")
-async def health_check():
-    """Detailed health check"""
+def health_check():
+    """Detailed health check: database reachable and FFmpeg runnable"""
+    try:
+        with engine.connect() as connection:
+            connection.execute(text("SELECT 1"))
+        database_ok = True
+    except Exception as e:
+        logger.error(f"Database health check failed: {e}")
+        database_ok = False
+
+    ffmpeg_ok = ImageProcessor.check_ffmpeg()
+
     return {
-        "status": "healthy",
-        "database": "connected",
-        "ffmpeg": "available"  # TODO: check if ffmpeg is actually available
+        "status": "healthy" if database_ok and ffmpeg_ok else "degraded",
+        "database": "connected" if database_ok else "unavailable",
+        "ffmpeg": "available" if ffmpeg_ok else "missing"
     }
 
 
 if __name__ == "__main__":
     uvicorn.run(
         "main:app",
-        # Local only by default: the API reads any folder on disk. Set PHOTO_CLEANER_HOST=0.0.0.0 to expose it on the LAN.
-        host=os.getenv("PHOTO_CLEANER_HOST", "127.0.0.1"),
-        port=8000,
+        host=config.HOST,
+        port=config.PORT,
         reload=True,
         log_level="info"
     )

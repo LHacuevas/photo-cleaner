@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { photosAPI } from '../services/api';
 
 /**
- * Hook custom per monitorare background tasks
+ * Custom hook that polls the status of a background task
  * 
  * Usage:
  *   const { taskId, status, progress, isRunning, error } = useBackgroundTask();
@@ -50,8 +50,10 @@ function useBackgroundTask(taskId = null, pollInterval = 1000) {
           if (interval) clearInterval(interval);
         }
       } catch (err) {
+        // e.g. 404 after a backend restart (tasks live in memory): stop polling
+        if (interval) clearInterval(interval);
         if (mounted) {
-          setError(err.message);
+          setError(err.response?.status === 404 ? 'Task not found (backend restarted?)' : err.message);
           console.error('Error checking task status:', err);
         }
       }

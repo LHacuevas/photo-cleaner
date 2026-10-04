@@ -32,34 +32,56 @@ Plan surgido de la revisión del proyecto (2026-10-04). Se sigue fase a fase; ma
 
 ## Fase 2 — Calidad de procesamiento de imagen
 
-- [ ] Miniaturas: `scale=300:-1` fija el ancho, no el lado largo (FFmpeg 8 sí aplica la orientación EXIF, comprobado).
-- [ ] Versiones web: no ampliar imágenes pequeñas (`min(iw,2048)`).
-- [ ] Hashes con `exif_transpose` para detectar duplicados con distinta orientación.
-- [x] `extract_exif` ya no falla en fotos sin EXIF.
-- [ ] Extraer `lens_model`; soporte HEIC/RAW (`pillow-heif`, `rawpy`).
-- [ ] Rotar/voltear para formatos no JPEG sin perder datos.
-- [ ] FFmpeg: `shutil.which` + variable de entorno en vez de ruta winget fija; `/api/health` debe usar `check_ffmpeg()`.
-- [x] Escaneo: extensiones sin distinguir mayúsculas y sin doble glob en Windows.
-- [ ] Escaneo: opción recursiva; detectar fotos eliminadas del disco.
+- [x] Miniaturas y versiones web escaladas por el **lado largo** y **sin ampliar** nunca (filtro `scale` con `min(iw,N)`; FFmpeg 8 aplica la orientación EXIF, comprobado).
+- [x] Hashes, ancho y alto calculados sobre la imagen **tal como se ve** (`exif_transpose`): la misma foto guardada con otra orientación se detecta como duplicada. Rotar o voltear recalcula hash y dimensiones.
+- [x] `extract_exif` ya no falla en fotos sin EXIF; se extrae `lens_model`.
+- [x] **HEIC/HEIF** (`pillow-heif`) y **RAW** (CR2, CR3, NEF, ARW, DNG, ORF, RW2, RAF vía `rawpy`, usando la vista previa incrustada): se escanean, analizan, generan miniaturas y versiones web en JPEG, y se sirven como JPEG al navegador. RAW está probado con un `rawpy` simulado; falta probarlo con archivos reales.
+- [x] Rotar/voltear **sin pérdida** también en PNG, BMP, TIFF, GIF y WebP lossless (píxeles exactos; se conservan ICC, EXIF, DPI y textos PNG). Se rechazan WebP con pérdida, imágenes animadas, HEIC y RAW.
+- [x] FFmpeg: se busca en `PHOTO_CLEANER_FFMPEG`, luego en el PATH y luego en winget/Program Files, sin versión fija; `/api/health` lo comprueba de verdad (y también la BD).
+- [x] Escaneo: extensiones sin distinguir mayúsculas; opción **recursiva** («Include subfolders»), donde `filename` es la ruta relativa y thumbs, web, cancellate y preferite replican las subcarpetas; al reescanear se **olvidan las fotos borradas del disco**.
+- [x] `backend/reanalyze.py` sustituye a `update_metadata.py`: vuelve a analizar las fotos ya indexadas. Conviene ejecutarlo una vez sobre el índice existente para tener hashes según la orientación y el objetivo.
 
 ## Fase 3 — Deuda técnica
 
-- [x] Cola de tareas: `cancel_task` cancela de verdad (nuevo `POST /api/photos/tasks/{id}/cancel`) y las tareas viejas se limpian solas.
+- [x] Cola de tareas: `cancel_task` cancela de verdad (`POST /api/photos/tasks/{id}/cancel`) y las tareas viejas se limpian solas.
 - [x] Endpoints `generate-*` síncronos y asíncronos comparten una única implementación.
-- [ ] Código muerto: `stats_cache`, `metadata_cache`, `QueryOptimizer` (importados o definidos sin uso); `update_metadata.py` duplica `utils/analysis.py`.
-- [ ] Acciones por lotes de la galería sin conectar: `handleBatchFavorite`, `handleBatchDelete` y `handleClearSelection` están definidos en `Gallery.js` pero no se usan (ESLint).
-- [ ] Unificar `_get_web_file_details` (duplicado en `similar.py`, ignora `cancellate/`).
-- [ ] Alembic para migraciones (antes de cualquier cambio de esquema).
-- [ ] Configuración en `.env` (CORS, puertos, FFmpeg); `start.bat` anuncia el puerto 3001 pero CRA usa 3000.
-- [ ] Frontend: extraer `PhotoViewer`/`ThumbnailStrip` de `Gallery.js`, toasts en vez de `alert()`, ErrorBoundary, migrar CRA → Vite.
-- [ ] Actualizar dependencias (FastAPI, Pydantic, SQLAlchemy, httpx); `lifespan` en lugar de `on_event("startup")`; `datetime.utcnow` deprecado.
-- [ ] Unificar idioma (README en italiano, código en inglés, carpetas `cancellate`/`preferite`).
+- [x] Código muerto eliminado: `utils/cache.py`, `utils/query_optimizer.py`, `update_metadata.py`, `compare_hashes`, modelos Pydantic sin uso, componentes `EXIFPanel`/`LoadingSpinner`, imports sobrantes (ruff y ESLint limpios) y 5 dependencias que no se usaban (aiosqlite, aiofiles, watchdog, exifread, python-multipart).
+- [x] Acciones por lotes conectadas: Ctrl+clic en miniaturas + `BatchActionBar` (favorita / descartar / limpiar).
+- [x] `get_web_file_details` unificado en `utils/photo_files.py` (la copia de `similar.py` ignoraba `cancellate/`).
+- [x] **Alembic**: migración inicial `0001`; `init_db()` marca las BD antiguas creadas con `create_all` y aplica migraciones. Verificado sobre una copia de la BD real (849 fotos, `alembic check` sin diferencias).
+- [x] Configuración en `backend/config.py` + `.env` (`.env.example`): host, puerto, BD, CORS (por defecto cualquier puerto de localhost) y FFmpeg. `start.bat` reescrito: puertos correctos, siempre sincroniza dependencias, CRLF/ASCII.
+- [x] Frontend: `PhotoViewer` (con zoom/desplazamiento) y `ThumbnailStrip` extraídos de `Gallery`; **toasts** en vez de `alert()`; **ErrorBoundary**; **CRA → Vite 8** (build en <1 s); React Router 7; `npm audit`: 0 vulnerabilidades; ESLint 9 sin avisos (atajos de teclado registrados una vez vía `ref`).
+- [x] Dependencias actualizadas y fijadas (FastAPI 0.142, Starlette 1.7, SQLAlchemy 2.1, Pydantic 2.13, Pillow 12.3); `lifespan` en lugar de `on_event`; sin `datetime.utcnow`; **0 avisos de deprecación** en los tests (antes 551).
+- [x] Idioma: documentación en **español**; interfaz y código en inglés (se tradujeron los textos en italiano de la galería). Las carpetas `cancellate`/`preferite` se mantienen a propósito (compatibilidad con archivos existentes) y se documentan. `OVERVIEW.md` y `TODO.md` eliminados (obsoletos; el backlog de ideas está abajo).
+- [x] Bug de paso: `H` abría la ayuda de atajos **y** volteaba la foto; la ayuda ahora solo se abre con `?` y lista los atajos reales.
+
+### Revisión con agentes (al documentar) — corregido
+
+Al escribir la guía de usuario y la especificación técnica, dos agentes leyeron todo el código y encontraron estos fallos, ya corregidos y con tests:
+
+- [x] **Grave:** rotar un RAW con estructura TIFF (NEF, DNG…) podía sobrescribirlo con un TIFF pequeño. Ahora HEIC y RAW se rechazan siempre.
+- [x] TIFF: miniaturas y versiones web en JPEG (los navegadores no muestran TIFF) y originales servidos como JPEG.
+- [x] Las versiones web conservan el EXIF del original (FFmpeg lo perdía pese a `-map_metadata`); WebP salía con calidad ínfima (`-q:v` de libwebp es 0–100).
+- [x] La home mostraba siempre «0 favorites / 0 deleted»; `has_thumbs` contaba fotos descartadas.
+- [x] Undo oculto con el panel de información plegado; el zoom con rueda hacía scroll (listener pasivo); teclas activas con la ayuda abierta; `useBackgroundTask` sondeaba para siempre tras un error.
+- [x] Escanear la carpeta padre de otra ya indexada daba 500; la misma carpeta con otras mayúsculas creaba un duplicado.
+- [x] Grupos pendientes obsoletos tras escanear o `reanalyze.py`; agrupado no determinista (sin `ORDER BY`).
+- [x] Estadísticas de metadatos >100 %, `date_to` excluía el último día, filtros numéricos a 0 ignorados, `GET /tasks?status=` no filtraba, altitud bajo el nivel del mar positiva, ISO en tupla, tarea cancelada marcada como fallida.
+
+### Pendiente detectado en la revisión
+
+- [ ] Vista de papelera: ver y restaurar lo que hay en `cancellate/` (la API ya admite `only_deleted`); quitar un proyecto de la lista.
+- [ ] Comparar no usa `POST /similar/group/{id}/select/{photo_id}`, así que no guarda `selected_photo_id`.
+- [ ] Endpoints de metadatos (búsqueda, mapa, por mes) y cancelación de tareas sin interfaz.
+- [ ] Columnas `folders.favorites_count/deleted_count` sin uso (los recuentos se calculan al vuelo): eliminarlas con una migración.
+- [ ] Fotos cuyo análisis falla se reintentan en cada análisis: marcarlas para no repetir.
+- [ ] Cancelar un análisis permite lanzar otro de la misma carpeta antes de que el primero se detenga.
 
 ## Fase 4 — Tests y CI
 
 - [x] pytest del ciclo de archivos (borrar, restaurar, favorito, rotar) comprobando que el original no cambia (hash/píxeles).
 - [x] Tests de escaneo y agrupado con imágenes sintéticas (incluye equivalencia del agrupado vectorizado con el original).
-- [x] Tests de endpoints con `TestClient` (98 tests; `cd backend && pytest`, dependencias en `requirements-dev.txt`).
+- [x] Tests de endpoints con `TestClient` (135 tests; `cd backend && pytest`, dependencias en `requirements-dev.txt`).
 - [ ] GitHub Actions: ruff + pytest + build del frontend.
 
 ## Fase 5 — Funcionalidades
@@ -68,3 +90,12 @@ Plan surgido de la revisión del proyecto (2026-10-04). Se sigue fase a fase; ma
 - [ ] Detección de fotos borrosas.
 - [ ] Vista de línea de tiempo (los endpoints `by-month` ya existen).
 - [ ] Papelera con "vaciar definitivamente" y confirmación.
+
+## Ideas a más largo plazo (backlog del antiguo TODO.md)
+
+- Reconocimiento facial y agrupación por persona; reconocimiento de objetos y escenas.
+- Puntuación de calidad (enfoque, exposición) y selección automática de "lo mejor de".
+- Soporte de vídeo (miniaturas, reproducción, metadatos).
+- Sistema de plugins.
+- Interfaz: tema claro/oscuro, atajos personalizables, varios idiomas, accesibilidad, uso en tablet/táctil.
+- Distribución: empaquetado como aplicación de escritorio (Electron o similar) con instalador.

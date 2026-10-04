@@ -1,167 +1,89 @@
 # 📸 Photo Cleaner
 
-**Gestione locale di archivi fotografici enormi - fino a 50.000+ foto**
+**Organiza y limpia archivos fotográficos enormes (50.000+ fotos) en local, sin perder nada.**
 
-Sistema completo per organizzare, pulire e ottimizzare archivi fotografici mantenendo tutto locale e non distruttivo.
+Photo Cleaner indexa una carpeta de fotos, genera miniaturas y versiones web, detecta duplicados y ráfagas, y te deja marcar favoritas o descartar fotos. Todo ocurre en tu equipo y ninguna acción destruye datos: «borrar» mueve la foto a una subcarpeta de la que se puede restaurar.
 
-## ✨ Caratteristiche Principali
+## Características
 
-- 🚀 **Prestazioni Estreme**: gestisce 50.000+ foto con navigazione fluida
-- 🔍 **Rilevamento Foto Simili**: trova automaticamente duplicati e raffiche
-- ⭐ **Sistema Preferiti**: marca e organizza le migliori foto
-- 🗑️ **Eliminazione Non Distruttiva**: niente viene mai cancellato definitivamente
-- 🌐 **Versioni Ottimizzate**: genera automaticamente thumbs e versioni web
-- 📊 **Ricerca Metadati**: filtra per data, GPS, camera, ISO, etc.
-- 💾 **Completamente Locale**: zero cloud, massima privacy
+- 🚀 **Pensado para archivos grandes:** el escaneo registra los archivos al instante y analiza EXIF y hashes en segundo plano, en paralelo. La galería carga por páginas y el agrupado de similares procesa 50.000 fotos en ~1 s.
+- 🔍 **Duplicados y ráfagas:** agrupa por hash perceptual, teniendo en cuenta la orientación de la foto.
+- ⭐ **Favoritas:** se copian a `preferite/`.
+- 🗑️ **Borrado no destructivo:** el original y sus versiones se mueven a `cancellate/`, y se pueden deshacer.
+- 🔄 **Rotar y voltear sin pérdida:** en JPEG solo cambia la etiqueta EXIF de orientación; en PNG, BMP, TIFF, GIF y WebP sin pérdida se conservan los píxeles exactos.
+- 🖼️ **Formatos:** JPG, PNG, GIF, BMP, TIFF, WebP, HEIC/HEIF y RAW (CR2, CR3, NEF, ARW, DNG, ORF, RW2, RAF).
+- 📊 **Metadatos:** fecha, cámara, objetivo, ajustes de exposición y GPS, con mapa.
+- 💾 **100 % local:** el backend solo escucha en `127.0.0.1` por defecto.
 
-## 🏗️ Architettura
+## Requisitos
 
+- Windows (el script `start.bat`; el código también funciona en otros sistemas)
+- Python 3.12
+- Node.js 20 o superior
+- FFmpeg, por ejemplo con `winget install Gyan.FFmpeg`
+
+## Inicio rápido
+
+```bat
+start.bat
 ```
+
+El script crea el entorno virtual `.venv`, sincroniza las dependencias y abre:
+
+- Backend: <http://localhost:8000> (documentación de la API en `/docs`)
+- Frontend: <http://localhost:3000>
+
+Después, escribe la ruta de una carpeta de fotos, pulsa **Scan Folder** y empieza a revisar. Tienes más detalle en [QUICKSTART.md](QUICKSTART.md) y en la [guía de usuario](docs/USER_GUIDE.md).
+
+## Estructura de una carpeta de fotos
+
+```text
+mis_fotos/
+├── IMG_001.jpg        # Originales (nunca se modifican sus píxeles)
+├── viaje/IMG_050.jpg  # Subcarpetas, si se escanea con «Include subfolders»
+├── thumbs/            # Miniaturas, 300 px de lado largo
+├── web/               # Versiones web, 2048 px de lado largo (nunca se amplían)
+├── cancellate/        # Fotos descartadas, con sus thumbs/web: reversible
+└── preferite/         # Copias de las favoritas
+```
+
+Los nombres `cancellate` (descartadas) y `preferite` (favoritas) se mantienen en italiano por compatibilidad con los archivos ya organizados.
+
+## Atajos de teclado
+
+| Tecla | Acción |
+| --- | --- |
+| `←` / `→` | Foto anterior / siguiente |
+| `F` | Marcar o desmarcar favorita |
+| `D` / `Supr` | Descartar (mover a `cancellate/`) |
+| `R` / `H` | Rotar 90° / voltear horizontalmente |
+| `V` | Alternar original / versión web |
+| `Ctrl+clic` | Seleccionar miniaturas para acciones por lotes |
+| `?` | Ayuda de atajos |
+
+En **Comparar**: `1`–`9` seleccionan foto, `←`/`→` cambian de grupo y `S` salta el grupo.
+
+## Arquitectura
+
+```text
 photo-cleaner/
-├── backend/          # Python FastAPI + elaborazione immagini
-├── frontend/         # React UI
-└── docs/            # Documentazione
+├── backend/           # FastAPI + SQLite (SQLAlchemy, Alembic) + Pillow/FFmpeg
+│   ├── api/           # Endpoints: folders, photos, similar, metadata
+│   ├── utils/         # Procesado de imagen, análisis, tareas en segundo plano
+│   ├── migrations/    # Migraciones de la base de datos
+│   └── tests/         # pytest
+├── frontend/          # React + Vite
+└── docs/              # Guía de usuario, desarrollo, especificación técnica y plan
 ```
 
-## 📁 Struttura Cartelle Foto
+## Configuración
 
-```
-cartella_foto/
-├── IMG_001.jpg           # Originali (intoccate)
-├── IMG_002.jpg
-├── IMG_003.jpg
-│
-├── thumbs/               # Miniature 300px (10-30 KB)
-├── web/                  # Versioni web 2048px (500-900 KB)
-├── cancellate/           # Foto scartate (reversibile)
-└── preferite/            # Foto marcate con stella
-```
+Copia `backend/.env.example` como `backend/.env` para cambiar el puerto, la ruta de la base de datos, los orígenes CORS o la ruta de FFmpeg. Las variables de entorno reales tienen prioridad.
 
-## 🎮 Comandi Principali
+## Documentación
 
-### Navigazione
-- `→` / `←` - Foto successiva/precedente
-- `Spazio` - Modalità confronto (foto simili)
-- `Esc` - Torna alla vista normale
-
-### Azioni
-- `F` - Aggiungi ai preferiti ⭐
-- `D` - Sposta in cancellate 🗑️
-- `1-4` - Seleziona foto migliore (in modalità confronto)
-- `S` - Salta gruppo (in modalità confronto)
-
-## 🚀 Quick Start
-
-### 1. Installazione
-
-```bash
-# Clona il repository
-git clone https://github.com/tuonome/photo-cleaner.git
-cd photo-cleaner
-
-# Installa dipendenze backend
-cd backend
-pip install -r requirements.txt
-
-# Installa dipendenze frontend
-cd ../frontend
-npm install
-```
-
-### 2. Avvio
-
-```bash
-# Terminale 1 - Backend
-cd backend
-python main.py
-
-# Terminale 2 - Frontend
-cd frontend
-npm start
-```
-
-### 3. Utilizzo
-
-1. Apri browser: `http://localhost:3000`
-2. Seleziona cartella con le foto
-3. Clicca "Genera Miniature"
-4. Inizia a pulire!
-
-## 📊 Funzionalità Dettagliate
-
-### Generazione Miniature
-- **Thumbs**: 300px lato lungo, 10-30 KB
-- **Formato**: JPEG ottimizzato
-- **Preserva**: Tutti i metadati EXIF
-
-### Versioni Web (3 modalità)
-
-| Modalità | Dimensione | Qualità | Peso |
-|----------|-----------|---------|------|
-| Web (consigliata) | 2048px | Alta | 500-900 KB |
-| Archivio leggero | 1600px | Media | 300-600 KB |
-| Ultra leggero | 1200px | Media-bassa | 150-400 KB |
-
-### Rilevamento Foto Simili
-- **Algoritmo**: Perceptual hashing (pHash)
-- **Velocità**: Analizza 1000+ foto/minuto
-- **Accuratezza**: Trova duplicati e variazioni minime
-- **Grouping**: Raggruppa automaticamente le raffiche
-
-### Ricerca e Filtri
-- Per data (range, mese, anno)
-- Per posizione GPS
-- Per camera/modello
-- Per parametri (ISO, apertura, tempo)
-- Solo preferite
-- Solo JPG/RAW
-
-## 💡 Flusso di Lavoro Consigliato
-
-1. **Importa** foto nella cartella
-2. **Avvia** Photo Cleaner e seleziona la cartella
-3. **Genera** miniature (una volta sola)
-4. **Analizza** foto simili automaticamente
-5. **Pulisci** raffiche e duplicati (modalità confronto)
-6. **Marca** ⭐ le migliori
-7. **Genera** versioni web ottimizzate
-8. **Risultato**: archivio pulito e organizzato!
-
-## 📈 Risultati Tipici
-
-| Fase | Dimensione |
-|------|-----------|
-| Archivio originale | 25 GB |
-| + Thumbs | +200 MB |
-| Archivio web | ~3 GB |
-| **Risparmio** | **88% rispetto all'originale** |
-
-## 🛠️ Requisiti di Sistema
-
-- **OS**: Windows 10/11 (compatibile anche macOS/Linux)
-- **RAM**: 4 GB minimo, 8 GB consigliato
-- **Disco**: Spazio per thumbs (~1% originali) + web (~12% originali)
-- **Software**: FFmpeg (incluso nel package)
-
-## 🔒 Privacy
-
-- ✅ Tutto locale, zero cloud
-- ✅ Nessun dato inviato online
-- ✅ Database SQLite locale
-- ✅ Controllo completo sui tuoi dati
-
-## 📝 Licenza
-
-MIT License - Usa liberamente!
-
-## 🤝 Contributi
-
-Contributi benvenuti! Apri una issue o pull request.
-
-## 📧 Supporto
-
-Per domande o problemi, apri una issue su GitHub.
-
----
-
-**Made with ❤️ for photographers who love local control**
+- [Inicio rápido](QUICKSTART.md)
+- [Guía de usuario](docs/USER_GUIDE.md)
+- [Guía de desarrollo](docs/DEVELOPMENT.md)
+- [Especificación técnica](docs/TECHNICAL_SPECS.md)
+- [Plan de mejoras](docs/IMPROVEMENT_PLAN.md)

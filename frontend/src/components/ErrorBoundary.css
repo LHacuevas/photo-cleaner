@@ -1,0 +1,20 @@
+.error-boundary {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  padding: 2rem;
+  text-align: center;
+}
+
+.error-boundary p {
+  color: #aaa;
+  max-width: 600px;
+}
+
+.error-boundary-actions {
+  display: flex;
+  gap: 0.75rem;
+}

@@ -1,38 +1,37 @@
-import React, { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowLeft,
-  ChevronLeft,
-  ChevronRight,
   FileImage,
   FlipHorizontal2,
-  Info,
   Loader,
   Monitor,
   RotateCw,
   Search,
   Star,
-  Trash2,
-  X
+  Trash2
 } from 'lucide-react';
-import { foldersAPI, photosAPI } from '../services/api';
+import { apiErrorMessage, foldersAPI, photosAPI } from '../services/api';
+import BatchActionBar from '../components/BatchActionBar';
+import PhotoViewer from '../components/PhotoViewer';
 import ProgressBar from '../components/ProgressBar';
+import ThumbnailStrip from '../components/ThumbnailStrip';
+import { useToast } from '../components/Toast';
 import useBackgroundTask from '../hooks/useBackgroundTask';
 import './Gallery.css';
 
 const PAGE_SIZE = 2000;
-// Thumbnails rendered on each side of the current photo (the strip never renders the whole folder)
-const STRIP_WINDOW = 60;
+const WEB_MODE = 'web';
 
 function Gallery() {
   const { folderId } = useParams();
   const navigate = useNavigate();
+  const toast = useToast();
 
   const [photos, setPhotos] = useState([]);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [loading, setLoading] = useState(true);
   const [folderStats, setFolderStats] = useState(null);
-  const [webMode] = useState('web');
   const [showWebVersion, setShowWebVersion] = useState(true);
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [batchLoading, setBatchLoading] = useState(false);
@@ -41,13 +40,6 @@ function Gallery() {
   const [imageRevision, setImageRevision] = useState(0);
   const [deleteNotice, setDeleteNotice] = useState(null);
   const [photoDetails, setPhotoDetails] = useState(null);
-  const [infoCollapsed, setInfoCollapsed] = useState(false);
-  const [zoom, setZoom] = useState(1);
-  const [pan, setPan] = useState({ x: 0, y: 0 });
-  const [isPanning, setIsPanning] = useState(false);
-  const thumbnailStripRef = useRef(null);
-  const thumbnailRefs = useRef({});
-  const panStartRef = useRef({ x: 0, y: 0, panX: 0, panY: 0 });
   const loadRequestRef = useRef(0);
 
   const {
@@ -67,121 +59,14 @@ function Gallery() {
   const currentPhoto = currentSummary && photoDetails?.id === currentSummary.id
     ? { ...photoDetails, ...currentSummary }
     : currentSummary;
-  const stripStart = Math.max(0, currentIndex - STRIP_WINDOW);
-  const stripPhotos = photos.slice(stripStart, currentIndex + STRIP_WINDOW + 1);
   const isShowingWebVersion = Boolean(currentPhoto?.has_web && showWebVersion);
   const mainPhotoSrc = currentPhoto
     ? `${photosAPI.getFile(currentPhoto.id, false, isShowingWebVersion)}&rev=${imageRevision}`
     : '';
-  const displayedWidth = isShowingWebVersion
-    ? (currentPhoto?.web_width || currentPhoto?.width)
-    : currentPhoto?.width;
-  const displayedHeight = isShowingWebVersion
-    ? (currentPhoto?.web_height || currentPhoto?.height)
-    : currentPhoto?.height;
-  const displayedSize = isShowingWebVersion
-    ? (currentPhoto?.web_size || currentPhoto?.size)
-    : currentPhoto?.size;
-  const hasGpsCoordinates = currentPhoto?.gps_latitude != null && currentPhoto?.gps_longitude != null;
-  const mapBounds = hasGpsCoordinates
-    ? {
-        left: currentPhoto.gps_longitude - 0.02,
-        right: currentPhoto.gps_longitude + 0.02,
-        top: currentPhoto.gps_latitude + 0.02,
-        bottom: currentPhoto.gps_latitude - 0.02
-      }
-    : null;
-  const embeddedMapUrl = hasGpsCoordinates
-    ? `https://www.openstreetmap.org/export/embed.html?bbox=${mapBounds.left}%2C${mapBounds.bottom}%2C${mapBounds.right}%2C${mapBounds.top}&layer=mapnik&marker=${currentPhoto.gps_latitude}%2C${currentPhoto.gps_longitude}`
-    : null;
-  const mapLinkUrl = hasGpsCoordinates
-    ? `https://www.openstreetmap.org/?mlat=${currentPhoto.gps_latitude}&mlon=${currentPhoto.gps_longitude}#map=14/${currentPhoto.gps_latitude}/${currentPhoto.gps_longitude}`
-    : null;
-
-  useEffect(() => {
-    loadPhotos({ progressive: true });
-    loadFolderStats();
-  }, [folderId]);
-
-  useEffect(() => {
-    if (!currentSummary?.id) {
-      setPhotoDetails(null);
-      return undefined;
-    }
-
-    let cancelled = false;
-    photosAPI.get(currentSummary.id)
-      .then((response) => {
-        if (!cancelled) {
-          setPhotoDetails(response.data);
-        }
-      })
-      .catch((error) => console.error('Error loading photo details:', error));
-
-    return () => {
-      cancelled = true;
-    };
-  }, [currentSummary?.id, imageRevision]);
-
-  useEffect(() => {
-    if (!backgroundTaskResult) {
-      return;
-    }
-
-    loadPhotos();
-    loadFolderStats();
-    setTaskKind(null);
-  }, [backgroundTaskResult]);
-
-  useEffect(() => {
-    if (!backgroundTaskError) {
-      return;
-    }
-
-    alert('Background task failed');
-    setTaskKind(null);
-  }, [backgroundTaskError]);
-
-  useEffect(() => {
-    const strip = thumbnailStripRef.current;
-    const activeThumbnail = thumbnailRefs.current[currentPhoto?.id];
-
-    if (!strip || !activeThumbnail) {
-      return;
-    }
-
-    const targetScrollLeft =
-      activeThumbnail.offsetLeft - (strip.clientWidth / 2) + (activeThumbnail.clientWidth / 2);
-
-    strip.scrollTo({
-      left: Math.max(0, targetScrollLeft),
-      behavior: 'smooth'
-    });
-  }, [currentIndex, currentPhoto?.id]);
-
-  useEffect(() => {
-    setZoom(1);
-    setPan({ x: 0, y: 0 });
-    setIsPanning(false);
-  }, [currentPhoto?.id, isShowingWebVersion]);
-
-  const formatFileSize = (bytes) => {
-    if (!bytes) {
-      return 'N/A';
-    }
-
-    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-    const exponent = Math.min(
-      Math.floor(Math.log(bytes) / Math.log(1024)),
-      units.length - 1
-    );
-    const value = bytes / (1024 ** exponent);
-    return `${value.toFixed(value >= 10 || exponent === 0 ? 0 : 1)} ${units[exponent]}`;
-  };
 
   // Loads every page of the folder. `progressive` shows each page as it arrives (first load);
   // reloads swap the list only once complete so the current position is kept.
-  const loadPhotos = async ({ progressive = false } = {}) => {
+  const loadPhotos = useCallback(async ({ progressive = false } = {}) => {
     const requestId = ++loadRequestRef.current;
     try {
       setLoading(true);
@@ -212,56 +97,91 @@ function Gallery() {
       setSelectedIds(new Set());
     } catch (error) {
       console.error('Error loading photos:', error);
-      alert('Error loading photos');
+      toast.error(apiErrorMessage(error, 'Error loading photos'));
     } finally {
       if (requestId === loadRequestRef.current) {
         setLoading(false);
       }
     }
-  };
+  }, [folderId, toast]);
 
-  const loadFolderStats = async () => {
+  const loadFolderStats = useCallback(async () => {
     try {
       const response = await foldersAPI.getStats(folderId);
       setFolderStats(response.data);
     } catch (error) {
       console.error('Error loading stats:', error);
     }
-  };
+  }, [folderId]);
 
-  const handleGenerateWeb = async () => {
+  useEffect(() => {
+    loadPhotos({ progressive: true });
+    loadFolderStats();
+  }, [loadPhotos, loadFolderStats]);
+
+  useEffect(() => {
+    if (!currentSummary?.id) {
+      setPhotoDetails(null);
+      return undefined;
+    }
+
+    let cancelled = false;
+    photosAPI.get(currentSummary.id)
+      .then((response) => {
+        if (!cancelled) {
+          setPhotoDetails(response.data);
+        }
+      })
+      .catch((error) => console.error('Error loading photo details:', error));
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentSummary?.id, imageRevision]);
+
+  useEffect(() => {
+    if (!backgroundTaskResult) {
+      return;
+    }
+
+    loadPhotos();
+    loadFolderStats();
+    setTaskKind(null);
+  }, [backgroundTaskResult, loadPhotos, loadFolderStats]);
+
+  useEffect(() => {
+    if (!backgroundTaskError) {
+      return;
+    }
+
+    toast.error(`Background task failed: ${backgroundTaskError}`);
+    setTaskKind(null);
+  }, [backgroundTaskError, toast]);
+
+  const startGeneration = async (kind, request, errorMessage) => {
     try {
-      const response = await photosAPI.generateWebAsync(folderId, webMode);
+      const response = await request();
       if (!response.data.task_id) {
-        alert(response.data.message);
+        toast.info(response.data.message);
         loadPhotos();
         loadFolderStats();
         return;
       }
-      setTaskKind('web');
+      setTaskKind(kind);
       setTaskId(response.data.task_id);
     } catch (error) {
-      console.error('Error generating web versions:', error);
-      alert('Error generating web versions');
+      console.error(errorMessage, error);
+      toast.error(apiErrorMessage(error, errorMessage));
     }
   };
 
-  const handleGenerateThumbs = async () => {
-    try {
-      const response = await photosAPI.generateThumbsAsync(folderId);
-      if (!response.data.task_id) {
-        alert(response.data.message);
-        loadPhotos();
-        loadFolderStats();
-        return;
-      }
-      setTaskKind('thumbs');
-      setTaskId(response.data.task_id);
-    } catch (error) {
-      console.error('Error generating thumbnails:', error);
-      alert('Error generating thumbnails');
-    }
-  };
+  const handleGenerateWeb = () => startGeneration(
+    'web', () => photosAPI.generateWebAsync(folderId, WEB_MODE), 'Error generating web versions'
+  );
+
+  const handleGenerateThumbs = () => startGeneration(
+    'thumbs', () => photosAPI.generateThumbsAsync(folderId), 'Error generating thumbnails'
+  );
 
   const handleToggleSelection = (photoId) => {
     setSelectedIds((prev) => {
@@ -287,14 +207,14 @@ function Gallery() {
     try {
       setBatchLoading(true);
       const response = await photosAPI.batchOperation('favorite', Array.from(selectedIds));
-      alert(response.data.message);
+      toast.success(response.data.message);
       setPhotos((prev) => prev.map((photo) => (
         selectedIds.has(photo.id) ? { ...photo, is_favorite: true } : photo
       )));
       setSelectedIds(new Set());
     } catch (error) {
       console.error('Error in batch favorite:', error);
-      alert('Error marking favorites');
+      toast.error(apiErrorMessage(error, 'Error marking favorites'));
     } finally {
       setBatchLoading(false);
     }
@@ -305,14 +225,14 @@ function Gallery() {
       return;
     }
 
-    if (!window.confirm(`Delete ${selectedIds.size} photos?`)) {
+    if (!window.confirm(`Move ${selectedIds.size} photos to cancellate?`)) {
       return;
     }
 
     try {
       setBatchLoading(true);
       const response = await photosAPI.batchOperation('delete', Array.from(selectedIds));
-      alert(response.data.message);
+      toast.success(response.data.message);
       const updated = photos.filter((photo) => !selectedIds.has(photo.id));
       setPhotos(updated);
       setSelectedIds(new Set());
@@ -320,7 +240,7 @@ function Gallery() {
       loadFolderStats();
     } catch (error) {
       console.error('Error in batch delete:', error);
-      alert('Error deleting photos');
+      toast.error(apiErrorMessage(error, 'Error deleting photos'));
     } finally {
       setBatchLoading(false);
     }
@@ -337,17 +257,13 @@ function Gallery() {
   const handleToggleFavorite = async () => {
     try {
       const photo = photos[currentIndex];
-      await photosAPI.toggleFavorite(photo.id);
-      setPhotos((prev) => {
-        const updated = [...prev];
-        updated[currentIndex] = {
-          ...updated[currentIndex],
-          is_favorite: !updated[currentIndex].is_favorite
-        };
-        return updated;
-      });
+      const response = await photosAPI.toggleFavorite(photo.id);
+      setPhotos((prev) => prev.map((item) => (
+        item.id === photo.id ? { ...item, is_favorite: response.data.is_favorite } : item
+      )));
     } catch (error) {
       console.error('Error toggling favorite:', error);
+      toast.error(apiErrorMessage(error, 'Error updating favorite'));
     }
   };
 
@@ -365,6 +281,7 @@ function Gallery() {
       loadFolderStats();
     } catch (error) {
       console.error('Error deleting photo:', error);
+      toast.error(apiErrorMessage(error, 'Error deleting photo'));
     }
   };
 
@@ -380,136 +297,63 @@ function Gallery() {
       await loadFolderStats();
     } catch (error) {
       console.error('Error restoring photo:', error);
-      alert('Error restoring photo');
+      toast.error(apiErrorMessage(error, 'Error restoring photo'));
     }
   };
 
-  const handleRotate = async (degrees = 90) => {
+  const transformCurrentPhoto = async (request, errorMessage) => {
     try {
       setRotationLoading(true);
       const photo = photos[currentIndex];
-      await photosAPI.rotate(photo.id, degrees);
+      await request(photo.id);
       const response = await photosAPI.get(photo.id);
-      setPhotos((prev) => {
-        const updated = [...prev];
-        updated[currentIndex] = response.data;
-        return updated;
-      });
+      setPhotos((prev) => prev.map((item) => (item.id === photo.id ? response.data : item)));
       setImageRevision((prev) => prev + 1);
     } catch (error) {
-      console.error('Error rotating photo:', error);
-      alert(error.response?.data?.detail || 'Error rotating photo');
+      console.error(errorMessage, error);
+      toast.error(apiErrorMessage(error, errorMessage));
     } finally {
       setRotationLoading(false);
     }
   };
 
-  const handleFlip = async (direction = 'horizontal') => {
-    try {
-      setRotationLoading(true);
-      const photo = photos[currentIndex];
-      await photosAPI.flip(photo.id, direction);
-      const response = await photosAPI.get(photo.id);
-      setPhotos((prev) => {
-        const updated = [...prev];
-        updated[currentIndex] = response.data;
-        return updated;
-      });
-      setImageRevision((prev) => prev + 1);
-    } catch (error) {
-      console.error('Error flipping photo:', error);
-      alert(error.response?.data?.detail || 'Error flipping photo');
-    } finally {
-      setRotationLoading(false);
-    }
-  };
+  const handleRotate = (degrees = 90) => transformCurrentPhoto(
+    (photoId) => photosAPI.rotate(photoId, degrees), 'Error rotating photo'
+  );
+
+  const handleFlip = (direction = 'horizontal') => transformCurrentPhoto(
+    (photoId) => photosAPI.flip(photoId, direction), 'Error flipping photo'
+  );
 
   const handleToggleImageVersion = () => {
     setShowWebVersion((prev) => !prev);
   };
 
-  const handleWheelZoom = (event) => {
-    event.preventDefault();
-    const delta = event.deltaY > 0 ? -0.15 : 0.15;
-    setZoom((prev) => {
-      const next = Math.min(8, Math.max(1, +(prev + delta).toFixed(2)));
-      if (next === 1) {
-        setPan({ x: 0, y: 0 });
-      }
-      return next;
-    });
-  };
-
-  const handlePointerDown = (event) => {
-    if (zoom <= 1) {
-      return;
-    }
-
-    event.preventDefault();
-    setIsPanning(true);
-    panStartRef.current = {
-      x: event.clientX,
-      y: event.clientY,
-      panX: pan.x,
-      panY: pan.y
-    };
-  };
-
-  const handlePointerMove = (event) => {
-    if (!isPanning) {
-      return;
-    }
-
-    const deltaX = event.clientX - panStartRef.current.x;
-    const deltaY = event.clientY - panStartRef.current.y;
-    setPan({
-      x: panStartRef.current.panX + deltaX,
-      y: panStartRef.current.panY + deltaY
-    });
-  };
-
-  const handlePointerUp = () => {
-    setIsPanning(false);
+  // The listener is registered once and always calls the latest handlers
+  const keyHandlersRef = useRef(null);
+  keyHandlersRef.current = {
+    ArrowRight: handleNext,
+    ArrowLeft: handlePrevious,
+    f: handleToggleFavorite,
+    d: handleDelete,
+    Delete: handleDelete,
+    h: () => handleFlip('horizontal'),
+    r: () => handleRotate(90),
+    v: handleToggleImageVersion
   };
 
   useEffect(() => {
     const handleKeyPress = (event) => {
-      switch (event.key) {
-        case 'ArrowRight':
-          handleNext();
-          break;
-        case 'ArrowLeft':
-          handlePrevious();
-          break;
-        case 'f':
-        case 'F':
-          handleToggleFavorite();
-          break;
-        case 'd':
-        case 'D':
-        case 'Delete':
-          handleDelete();
-          break;
-        case 'h':
-        case 'H':
-          handleFlip('horizontal');
-          break;
-        case 'r':
-        case 'R':
-          handleRotate(90);
-          break;
-        case 'v':
-        case 'V':
-          handleToggleImageVersion();
-          break;
-        default:
-          break;
+      if (event.target.closest?.('input, textarea') || document.querySelector('.keyboard-shortcuts-overlay')) {
+        return;
       }
+      const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
+      keyHandlersRef.current[key]?.();
     };
 
     window.addEventListener('keydown', handleKeyPress);
     return () => window.removeEventListener('keydown', handleKeyPress);
-  }, [currentIndex, photos]);
+  }, []);
 
   if (loading) {
     return (
@@ -524,7 +368,7 @@ function Gallery() {
     return (
       <div className="gallery-empty">
         <h2>No Photos Found</h2>
-        <p>This folder doesn't contain any photos yet.</p>
+        <p>This folder does not contain any photos yet.</p>
         <button className="btn btn-primary" onClick={() => navigate('/')}>
           Back to Home
         </button>
@@ -626,13 +470,13 @@ function Gallery() {
             onClick={handleToggleImageVersion}
             title={
               currentPhoto.has_web
-                ? (isShowingWebVersion ? 'Mostra originale' : 'Mostra versione web')
-                : 'Versione web non disponibile'
+                ? (isShowingWebVersion ? 'Show original (V)' : 'Show web version (V)')
+                : 'No web version available'
             }
             disabled={!currentPhoto.has_web}
           >
             {isShowingWebVersion ? <Monitor size={20} /> : <FileImage size={20} />}
-            {isShowingWebVersion ? 'Web' : 'Originale'}
+            {isShowingWebVersion ? 'Web' : 'Original'}
           </button>
 
           <button
@@ -646,155 +490,34 @@ function Gallery() {
       </div>
 
       <div className="gallery-content">
-        <div className="gallery-viewer">
-          <button className="nav-btn nav-prev" onClick={handlePrevious}>
-            <ChevronLeft size={32} />
-          </button>
-
-          <div className="photo-container" key={`${currentPhoto.id}-${isShowingWebVersion ? 'web' : 'original'}`}>
-            <div className="viewer-layout">
-              <div className={`photo-info ${infoCollapsed ? 'is-collapsed' : ''}`}>
-                <button
-                  className="photo-info-toggle"
-                  onClick={() => setInfoCollapsed((prev) => !prev)}
-                  title={infoCollapsed ? 'Show info' : 'Hide info'}
-                >
-                  <Info size={16} />
-                  <span>{infoCollapsed ? 'Info' : 'Hide'}</span>
-                </button>
-
-                {!infoCollapsed && (
-                  <>
-                    <h3>{currentPhoto.filename}</h3>
-                    <span className="version-indicator">
-                      Visualizzazione: {isShowingWebVersion ? 'Web' : 'Originale'}
-                    </span>
-                    <span className="photo-meta">
-                      Risoluzione: {displayedWidth || '?'} x {displayedHeight || '?'}
-                    </span>
-                    <span className="photo-meta">
-                      Dimensione: {formatFileSize(displayedSize)}
-                    </span>
-                    {currentPhoto.camera_model && (
-                      <span className="photo-meta">
-                        Fotocamera: {currentPhoto.camera_model}
-                      </span>
-                    )}
-                    {currentPhoto.date_taken && (
-                      <span className="photo-meta">
-                        Data: {new Date(currentPhoto.date_taken).toLocaleString()}
-                      </span>
-                    )}
-                    {(currentPhoto.gps_latitude || currentPhoto.gps_longitude) && (
-                      <span className="photo-meta">
-                        Posizione: {currentPhoto.gps_latitude ?? '?'}, {currentPhoto.gps_longitude ?? '?'}
-                      </span>
-                    )}
-                    {hasGpsCoordinates && (
-                      <div className="photo-map">
-                        <iframe
-                          title={`Map for ${currentPhoto.filename}`}
-                          src={embeddedMapUrl}
-                          className="photo-map-frame"
-                          loading="lazy"
-                          referrerPolicy="no-referrer-when-downgrade"
-                        />
-                        <a
-                          href={mapLinkUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="photo-map-link"
-                        >
-                          Open map
-                        </a>
-                      </div>
-                    )}
-                    {deleteNotice && (
-                      <div className="delete-notice">
-                        <div className="delete-notice-text">
-                          <span>{deleteNotice.filename} moved to cancellate.</span>
-                        </div>
-                        <div className="delete-notice-actions">
-                          <button className="btn btn-secondary" onClick={handleUndoDelete}>
-                            Undo
-                          </button>
-                          <button
-                            className="delete-notice-close"
-                            onClick={() => setDeleteNotice(null)}
-                            title="Close"
-                          >
-                            <X size={16} />
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                  </>
-                )}
-              </div>
-
-              <div
-                className={`main-photo-stage ${zoom > 1 ? 'is-zoomed' : ''} ${isPanning ? 'is-panning' : ''}`}
-                onWheel={handleWheelZoom}
-                onPointerMove={handlePointerMove}
-                onPointerUp={handlePointerUp}
-                onPointerLeave={handlePointerUp}
-              >
-                <img
-                  key={mainPhotoSrc}
-                  src={mainPhotoSrc}
-                  alt={currentPhoto.filename}
-                  className="main-photo"
-                  onPointerDown={handlePointerDown}
-                  draggable={false}
-                  style={{
-                    transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`
-                  }}
-                />
-              </div>
-            </div>
-          </div>
-
-          <button className="nav-btn nav-next" onClick={handleNext}>
-            <ChevronRight size={32} />
-          </button>
-        </div>
-
+        <PhotoViewer
+          photo={currentPhoto}
+          src={mainPhotoSrc}
+          isShowingWebVersion={isShowingWebVersion}
+          onPrevious={handlePrevious}
+          onNext={handleNext}
+          deleteNotice={deleteNotice}
+          onUndoDelete={handleUndoDelete}
+          onDismissDeleteNotice={() => setDeleteNotice(null)}
+        />
       </div>
 
-      <div className="thumbnail-strip" ref={thumbnailStripRef}>
-        {stripPhotos.map((photo, stripIndex) => {
-          const index = stripStart + stripIndex;
-          return (
-          <div
-            key={photo.id}
-            ref={(node) => {
-              if (node) {
-                thumbnailRefs.current[photo.id] = node;
-              } else {
-                delete thumbnailRefs.current[photo.id];
-              }
-            }}
-            className={`thumbnail ${index === currentIndex ? 'active' : ''} ${selectedIds.has(photo.id) ? 'selected' : ''}`}
-            onClick={(event) => {
-              if (event.ctrlKey || event.metaKey) {
-                handleToggleSelection(photo.id);
-                return;
-              }
-              setCurrentIndex(index);
-            }}
-            title={selectedIds.has(photo.id) ? 'Ctrl+Click to deselect' : 'Ctrl+Click to select'}
-          >
-            <img
-              src={photo.has_thumb ? photosAPI.getFile(photo.id, true) : photosAPI.getFile(photo.id)}
-              alt={photo.filename}
-            />
-            {photo.is_favorite && <Star className="fav-badge" size={16} />}
-            {selectedIds.has(photo.id) && <div className="selection-badge">OK</div>}
-          </div>
-          );
-        })}
-      </div>
+      <ThumbnailStrip
+        photos={photos}
+        currentIndex={currentIndex}
+        selectedIds={selectedIds}
+        onSelect={setCurrentIndex}
+        onToggleSelection={handleToggleSelection}
+      />
 
+      <BatchActionBar
+        selectedIds={Array.from(selectedIds)}
+        total={photos.length}
+        onFavorite={handleBatchFavorite}
+        onDelete={handleBatchDelete}
+        onClear={handleClearSelection}
+        isLoading={batchLoading}
+      />
     </div>
   );
 }

@@ -12,7 +12,7 @@ import logging
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Callable, Dict, Optional
 
@@ -44,7 +44,7 @@ class Task:
         self.progress = 0
         self.result = None
         self.error = None
-        self.created_at = datetime.utcnow()
+        self.created_at = datetime.now(timezone.utc)
         self.started_at = None
         self.completed_at = None
 
@@ -104,7 +104,7 @@ class BackgroundTaskQueue:
             return
 
         task.status = TaskStatus.RUNNING
-        task.started_at = datetime.utcnow()
+        task.started_at = datetime.now(timezone.utc)
 
         try:
             logger.info(f"Task started: {task.name} (ID: {task.id})")
@@ -122,11 +122,12 @@ class BackgroundTaskQueue:
 
         except Exception as e:
             task.error = str(e)
-            task.status = TaskStatus.FAILED
+            if not task.is_cancelled:
+                task.status = TaskStatus.FAILED
             logger.exception(f"Task failed: {task.name} (ID: {task.id})")
 
         finally:
-            task.completed_at = datetime.utcnow()
+            task.completed_at = datetime.now(timezone.utc)
 
     def get_task(self, task_id: str) -> Optional[Task]:
         """Get task by ID"""

@@ -3,14 +3,21 @@ Database models and initialization
 SQLite database for storing photo metadata, hashes, and relationships
 """
 
-from sqlalchemy import create_engine, event, Column, Integer, String, Float, DateTime, Boolean, ForeignKey
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, relationship
-from datetime import datetime
-from pathlib import Path
-import os
+from sqlalchemy import create_engine, event, inspect, Column, Integer, String, Float, DateTime, Boolean, ForeignKey
+from sqlalchemy.orm import declarative_base, sessionmaker, relationship
+from datetime import datetime, timezone
+
+from alembic import command
+from alembic.config import Config
+
+from config import BACKEND_DIR, DATABASE_URL
 
 Base = declarative_base()
+
+
+def utcnow() -> datetime:
+    """Current UTC time as a naive datetime (the format stored in the DB)"""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 class Photo(Base):
@@ -58,8 +65,8 @@ class Photo(Base):
     has_web = Column(Boolean, default=False)
     
     # Timestamps
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
     
     # Relationships
     folder = relationship("Folder", back_populates="photos")
@@ -80,7 +87,7 @@ class Folder(Base):
     deleted_count = Column(Integer, default=0)
     
     # Timestamps
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
     last_scanned = Column(DateTime)
     
     # Relationships
@@ -102,7 +109,7 @@ class SimilarGroup(Base):
     is_reviewed = Column(Boolean, default=False)
     selected_photo_id = Column(Integer)  # The "keeper" photo
     
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
     
     # Relationships
     photos = relationship("Photo", secondary="photo_similar_groups", back_populates="similar_groups")
@@ -117,11 +124,6 @@ class PhotoSimilarGroup(Base):
 
 
 # Database setup
-# Next to this file regardless of the working directory; overridable (e.g. tests use a temp DB)
-DATABASE_URL = os.getenv(
-    "PHOTO_CLEANER_DATABASE_URL",
-    f"sqlite:///{Path(__file__).resolve().parent / 'photo_cleaner.db'}"
-)
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 
 
@@ -132,12 +134,30 @@ def _configure_sqlite(dbapi_connection, connection_record):
     cursor.execute("PRAGMA journal_mode=WAL")
     cursor.execute("PRAGMA busy_timeout=5000")
     cursor.close()
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
-async def init_db():
-    """Initialize database - create all tables"""
-    Base.metadata.create_all(bind=engine)
+SessionLocal = sessionmaker(autoflush=False, bind=engine)
+
+# Revision matching the schema that existed before migrations were introduced
+BASELINE_REVISION = "0001"
+
+
+def _alembic_config() -> Config:
+    config = Config(str(BACKEND_DIR / "alembic.ini"))
+    config.set_main_option("script_location", str(BACKEND_DIR / "migrations"))
+    return config
+
+
+def init_db():
+    """Bring the database schema up to date by running Alembic migrations"""
+    config = _alembic_config()
+    with engine.begin() as connection:
+        config.attributes["connection"] = connection
+        tables = inspect(connection).get_table_names()
+        if "photos" in tables and "alembic_version" not in tables:
+            # Database created with create_all() before migrations existed
+            command.stamp(config, BASELINE_REVISION)
+        command.upgrade(config, "head")
 
 
 def get_db():

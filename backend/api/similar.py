@@ -5,38 +5,39 @@ Similar Photos API - Detect duplicates and similar photos using perceptual hashi
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-from pathlib import Path
-from typing import List, Dict
+from typing import List
 import logging
 
 import numpy as np
 
 from database import get_db, Photo, SimilarGroup, PhotoSimilarGroup
 from utils.analysis import enqueue_folder_analysis
-from utils.image_processing import ImageProcessor
-from utils.photo_files import move_photo_variants
-from pydantic import BaseModel
+from utils.photo_files import get_web_file_details, move_photo_variants
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
 
-def _get_web_file_details(photo: Photo) -> dict:
-    web_path = Path(photo.filepath).parent / 'web' / Path(photo.filepath).name
-    if not web_path.exists():
-        return {
-            "web_size": None,
-            "web_width": None,
-            "web_height": None
-        }
-
-    web_info = ImageProcessor.get_image_info(web_path) or {}
-    return {
-        "web_size": web_info.get("size", web_path.stat().st_size),
-        "web_width": web_info.get("width"),
-        "web_height": web_info.get("height")
-    }
+def clear_pending_groups(db: Session, folder_id: int):
+    """
+    Forget the folder's unreviewed groups; Compare regroups when none are pending.
+    Called whenever the folder's photos or hashes change, so groups never go stale.
+    """
+    pending_group_ids = [
+        group_id for (group_id,) in db.query(SimilarGroup.id).filter(
+            SimilarGroup.folder_id == folder_id,
+            SimilarGroup.is_reviewed == False
+        )
+    ]
+    if pending_group_ids:
+        db.query(PhotoSimilarGroup).filter(
+            PhotoSimilarGroup.group_id.in_(pending_group_ids)
+        ).delete(synchronize_session=False)
+        db.query(SimilarGroup).filter(
+            SimilarGroup.id.in_(pending_group_ids)
+        ).delete(synchronize_session=False)
+        db.commit()
 
 
 def _is_valid_hash(phash: str) -> bool:
@@ -82,15 +83,6 @@ def _average_distance(hashes: np.ndarray) -> float:
     return float(pairwise[np.triu_indices(len(hashes), k=1)].mean())
 
 
-class SimilarGroupResponse(BaseModel):
-    id: int
-    photo_count: int
-    similarity_score: float
-    group_type: str
-    is_reviewed: bool
-    photos: List[int]  # Photo IDs
-
-
 @router.post("/analyze/{folder_id}")
 def analyze_similar_photos(folder_id: int):
     """
@@ -133,20 +125,7 @@ def group_similar_photos(
     """
     try:
         # Re-grouping replaces the pending (unreviewed) groups instead of piling up duplicates
-        pending_group_ids = [
-            group_id for (group_id,) in db.query(SimilarGroup.id).filter(
-                SimilarGroup.folder_id == folder_id,
-                SimilarGroup.is_reviewed == False
-            )
-        ]
-        if pending_group_ids:
-            db.query(PhotoSimilarGroup).filter(
-                PhotoSimilarGroup.group_id.in_(pending_group_ids)
-            ).delete(synchronize_session=False)
-            db.query(SimilarGroup).filter(
-                SimilarGroup.id.in_(pending_group_ids)
-            ).delete(synchronize_session=False)
-            db.commit()
+        clear_pending_groups(db, folder_id)
 
         # Photos already reviewed in a group are not proposed again
         reviewed_photo_ids = select(PhotoSimilarGroup.photo_id).join(
@@ -162,7 +141,7 @@ def group_similar_photos(
             Photo.is_deleted == False,
             Photo.phash != None,
             Photo.id.not_in(reviewed_photo_ids)
-        ).all()
+        ).order_by(Photo.filename, Photo.id).all()  # greedy grouping depends on order
         
         photos = [photo for photo in photos if _is_valid_hash(photo.phash)]
         
@@ -301,7 +280,7 @@ def get_group_details(group_id: int, db: Session = Depends(get_db)):
                     "date_taken": p.date_taken.isoformat() if p.date_taken else None,
                     "is_favorite": p.is_favorite,
                     "is_deleted": p.is_deleted,
-                    **(_get_web_file_details(p) if p.has_web else {
+                    **(get_web_file_details(p) if p.has_web else {
                         "web_size": None,
                         "web_width": None,
                         "web_height": None

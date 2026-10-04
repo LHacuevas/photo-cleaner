@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000/api';
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
 
 const api = axios.create({
   baseURL: API_BASE_URL,
@@ -11,7 +11,7 @@ const api = axios.create({
 
 // Folders API
 export const foldersAPI = {
-  scan: (path) => api.post('/folders/scan', { path }),
+  scan: (path, recursive = false) => api.post('/folders/scan', { path, recursive }),
   getStats: (folderId) => api.get(`/folders/stats/${folderId}`),
   list: () => api.get('/folders/list'),
 };
@@ -71,3 +71,9 @@ export const metadataAPI = {
 };
 
 export default api;
+
+// Human-readable message from a failed API call (backend `detail`/`message`), or the fallback
+export function apiErrorMessage(error, fallback) {
+  const data = error?.response?.data;
+  return (typeof data?.detail === 'string' && data.detail) || data?.message || fallback;
+}

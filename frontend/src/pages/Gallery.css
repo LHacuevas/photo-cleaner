@@ -385,3 +385,8 @@
 .delete-notice-close:hover {
   background: rgba(255, 255, 255, 0.14);
 }
+
+/* Keep the batch action bar above the thumbnail strip instead of covering it */
+.gallery-page .batch-action-bar {
+  bottom: 97px;
+}

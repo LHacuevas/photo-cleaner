@@ -1,5 +1,6 @@
 -r requirements.txt
 
-# Testing
-pytest>=8
-httpx<0.28  # starlette 0.35 TestClient is incompatible with httpx 0.28+
+# Testing and linting
+pytest==9.1.1
+httpx2==2.13.1  # used by starlette.testclient
+ruff==0.16.10

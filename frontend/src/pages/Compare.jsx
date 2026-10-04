@@ -1,13 +1,16 @@
-import React, { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, ChevronLeft, ChevronRight, FileImage, Loader, Monitor, SkipForward, Trash2 } from 'lucide-react';
-import { photosAPI, similarAPI } from '../services/api';
+import { apiErrorMessage, photosAPI, similarAPI } from '../services/api';
 import ProgressBar from '../components/ProgressBar';
+import { useToast } from '../components/Toast';
+import { formatFileSize } from '../utils/format';
 import './Compare.css';
 
 function Compare() {
   const { folderId } = useParams();
   const navigate = useNavigate();
+  const toast = useToast();
 
   const [groups, setGroups] = useState([]);
   const [currentGroupIdx, setCurrentGroupIdx] = useState(0);
@@ -16,43 +19,39 @@ function Compare() {
   const [photoVersions, setPhotoVersions] = useState({});
   const [analysisProgress, setAnalysisProgress] = useState(null);
 
-  useEffect(() => {
-    loadGroups();
-  }, [folderId]);
+  const loadGroups = useCallback(async () => {
+    const fetchPendingGroups = async () => {
+      const groupsResponse = await similarAPI.getGroups(folderId, true);
+      const detailResponses = await Promise.all(
+        (groupsResponse.data.groups || []).map((group) => similarAPI.getGroup(group.id))
+      );
+      // Photos deleted from the gallery since grouping are no longer candidates
+      return detailResponses
+        .map((response) => ({
+          ...response.data,
+          photos: response.data.photos.filter((photo) => !photo.is_deleted)
+        }))
+        .filter((group) => group.photos.length > 1);
+    };
 
-  const fetchPendingGroups = async () => {
-    const groupsResponse = await similarAPI.getGroups(folderId, true);
-    const detailResponses = await Promise.all(
-      (groupsResponse.data.groups || []).map((group) => similarAPI.getGroup(group.id))
-    );
-    // Photos deleted from the gallery since grouping are no longer candidates
-    return detailResponses
-      .map((response) => ({
-        ...response.data,
-        photos: response.data.photos.filter((photo) => !photo.is_deleted)
-      }))
-      .filter((group) => group.photos.length > 1);
-  };
-
-  // Grouping only sees photos with hashes, so wait for any pending analysis first
-  const waitForAnalysis = async () => {
-    const response = await similarAPI.analyze(folderId);
-    const { task_id: taskId } = response.data;
-    if (!taskId) {
-      return;
-    }
-
-    for (;;) {
-      const { data: task } = await photosAPI.getTaskStatus(taskId);
-      setAnalysisProgress(task.progress);
-      if (['completed', 'failed', 'cancelled'].includes(task.status)) {
+    // Grouping only sees photos with hashes, so wait for any pending analysis first
+    const waitForAnalysis = async () => {
+      const response = await similarAPI.analyze(folderId);
+      const { task_id: taskId } = response.data;
+      if (!taskId) {
         return;
       }
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-    }
-  };
 
-  const loadGroups = async () => {
+      for (;;) {
+        const { data: task } = await photosAPI.getTaskStatus(taskId);
+        setAnalysisProgress(task.progress);
+        if (['completed', 'failed', 'cancelled'].includes(task.status)) {
+          return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
+    };
+
     try {
       setLoading(true);
       let nextGroups = await fetchPendingGroups();
@@ -67,28 +66,18 @@ function Compare() {
       setPhotoVersions({});
     } catch (error) {
       console.error('Error loading groups:', error);
-      alert('Error loading similar photos. Make sure to analyze first.');
+      toast.error(apiErrorMessage(error, 'Error loading similar photos'));
     } finally {
       setLoading(false);
       setAnalysisProgress(null);
     }
-  };
+  }, [folderId, toast]);
+
+  useEffect(() => {
+    loadGroups();
+  }, [loadGroups]);
 
   const currentGroup = groups[currentGroupIdx];
-
-  const formatFileSize = (bytes) => {
-    if (!bytes) {
-      return 'N/A';
-    }
-
-    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-    const exponent = Math.min(
-      Math.floor(Math.log(bytes) / Math.log(1024)),
-      units.length - 1
-    );
-    const value = bytes / (1024 ** exponent);
-    return `${value.toFixed(value >= 10 || exponent === 0 ? 0 : 1)} ${units[exponent]}`;
-  };
 
   const isPhotoUsingWeb = (photo) => Boolean(photo.has_web && photoVersions[photo.id]);
 
@@ -135,13 +124,13 @@ function Compare() {
       return;
     }
 
-    alert('All groups reviewed!');
+    toast.success('All groups reviewed!');
     navigate(`/gallery/${folderId}`);
   };
 
   const handleDeleteSelected = async () => {
     if (selectedPhotos.length === 0) {
-      alert('Please select at least one photo to delete');
+      toast.info('Select at least one photo to delete');
       return;
     }
 
@@ -155,7 +144,7 @@ function Compare() {
       moveToNextGroup();
     } catch (error) {
       console.error('Error deleting photos:', error);
-      alert('Error deleting photos');
+      toast.error(apiErrorMessage(error, 'Error deleting photos'));
     }
   };
 
@@ -165,7 +154,7 @@ function Compare() {
       .map((photo) => photo.id);
 
     if (othersToDelete.length === 0) {
-      alert('No other photos to delete');
+      toast.info('No other photos to delete');
       return;
     }
 
@@ -179,7 +168,7 @@ function Compare() {
       moveToNextGroup();
     } catch (error) {
       console.error('Error deleting photos:', error);
-      alert('Error deleting photos');
+      toast.error(apiErrorMessage(error, 'Error deleting photos'));
     }
   };
 
@@ -189,40 +178,44 @@ function Compare() {
       moveToNextGroup();
     } catch (error) {
       console.error('Error skipping group:', error);
+      toast.error(apiErrorMessage(error, 'Error skipping group'));
+    }
+  };
+
+  // The listener is registered once and always calls the latest handlers
+  const keyHandlerRef = useRef(null);
+  keyHandlerRef.current = (event) => {
+    if (loading || groups.length === 0 || document.querySelector('.keyboard-shortcuts-overlay')) {
+      return;
+    }
+
+    if (event.key >= '1' && event.key <= '9') {
+      handleSelectByNumber(parseInt(event.key, 10));
+    }
+
+    switch (event.key) {
+      case 'ArrowLeft':
+        setCurrentGroupIdx((prev) => Math.max(0, prev - 1));
+        setSelectedPhotos([]);
+        break;
+      case 'ArrowRight':
+        setCurrentGroupIdx((prev) => Math.min(groups.length - 1, prev + 1));
+        setSelectedPhotos([]);
+        break;
+      case 's':
+      case 'S':
+        handleSkipGroup();
+        break;
+      default:
+        break;
     }
   };
 
   useEffect(() => {
-    const handleKeyPress = (event) => {
-      if (loading || groups.length === 0) {
-        return;
-      }
-
-      if (event.key >= '1' && event.key <= '9') {
-        handleSelectByNumber(parseInt(event.key, 10));
-      }
-
-      switch (event.key) {
-        case 'ArrowLeft':
-          setCurrentGroupIdx((prev) => Math.max(0, prev - 1));
-          setSelectedPhotos([]);
-          break;
-        case 'ArrowRight':
-          setCurrentGroupIdx((prev) => Math.min(groups.length - 1, prev + 1));
-          setSelectedPhotos([]);
-          break;
-        case 's':
-        case 'S':
-          handleSkipGroup();
-          break;
-        default:
-          break;
-      }
-    };
-
+    const handleKeyPress = (event) => keyHandlerRef.current(event);
     window.addEventListener('keydown', handleKeyPress);
     return () => window.removeEventListener('keydown', handleKeyPress);
-  }, [currentGroup, currentGroupIdx, groups, loading, selectedPhotos]);
+  }, []);
 
   if (loading) {
     return (

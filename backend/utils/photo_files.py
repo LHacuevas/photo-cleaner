@@ -7,6 +7,7 @@ from typing import Optional
 import shutil
 
 from database import Photo
+from utils.image_processing import ImageProcessor
 
 
 def get_folder_root(photo: Photo) -> Path:
@@ -79,3 +80,21 @@ def set_favorite(photo: Photo, is_favorite: bool):
         favorite_path.unlink()
 
     photo.is_favorite = is_favorite
+
+
+def get_web_file_details(photo: Photo) -> dict:
+    """Return file metadata for the generated web version if it exists."""
+    web_path = get_web_path(photo)
+    if not web_path.exists():
+        return {
+            "web_size": None,
+            "web_width": None,
+            "web_height": None
+        }
+
+    web_info = ImageProcessor.get_image_info(web_path) or {}
+    return {
+        "web_size": web_info.get("size", web_path.stat().st_size),
+        "web_width": web_info.get("width"),
+        "web_height": web_info.get("height")
+    }

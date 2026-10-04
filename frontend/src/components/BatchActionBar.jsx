@@ -1,4 +1,3 @@
-import React from 'react';
 import { Trash2, Star, X } from 'lucide-react';
 import './BatchActionBar.css';
 
@@ -11,7 +10,7 @@ function BatchActionBar({ selectedIds, total, onFavorite, onDelete, onClear, isL
     <div className="batch-action-bar">
       <div className="batch-info">
         <span className="batch-count">
-          {selectedIds.length} selected
+          {selectedIds.length} of {total} selected
         </span>
       </div>
 

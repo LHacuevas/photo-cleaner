@@ -1,12 +1,15 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Folder, Image, Star, Trash2, Loader } from 'lucide-react';
-import { foldersAPI } from '../services/api';
+import { apiErrorMessage, foldersAPI } from '../services/api';
+import { useToast } from '../components/Toast';
 import './Home.css';
 
 function Home() {
   const navigate = useNavigate();
+  const toast = useToast();
   const [folderPath, setFolderPath] = useState('');
+  const [recursive, setRecursive] = useState(false);
   const [folders, setFolders] = useState([]);
   const [loading, setLoading] = useState(false);
   const [scanning, setScanning] = useState(false);
@@ -29,24 +32,27 @@ function Home() {
 
   const handleScanFolder = async () => {
     if (!folderPath.trim()) {
-      alert('Please enter a folder path');
+      toast.info('Enter a folder path');
       return;
     }
 
     try {
       setScanning(true);
-      const response = await foldersAPI.scan(folderPath);
+      const response = await foldersAPI.scan(folderPath, recursive);
       
       const analysisNote = response.data.analysis_task_id
         ? '\n\nDates, camera info and duplicate detection are being computed in the background.'
         : '';
-      alert(`✅ Folder scanned successfully!\n\nPhotos found: ${response.data.total_photos}\nNew photos: ${response.data.new_photos}${analysisNote}`);
+      const removedNote = response.data.removed_photos
+        ? `\nNo longer on disk (removed): ${response.data.removed_photos}`
+        : '';
+      toast.success(`Folder scanned\nPhotos: ${response.data.total_photos}\nNew: ${response.data.new_photos}${removedNote}${analysisNote}`);
       
       // Navigate to gallery
       navigate(`/gallery/${response.data.folder_id}`);
     } catch (error) {
       console.error('Error scanning folder:', error);
-      alert('❌ Error scanning folder. Please check the path and try again.');
+      toast.error(apiErrorMessage(error, 'Error scanning folder. Check the path and try again.'));
     } finally {
       setScanning(false);
     }
@@ -83,7 +89,7 @@ function Home() {
               placeholder="Enter folder path (e.g., C:\Photos\Vacation2024)"
               value={folderPath}
               onChange={(e) => setFolderPath(e.target.value)}
-              onKeyPress={(e) => e.key === 'Enter' && handleScanFolder()}
+              onKeyDown={(e) => e.key === 'Enter' && handleScanFolder()}
             />
             <button
               className="btn btn-primary"
@@ -100,8 +106,16 @@ function Home() {
               )}
             </button>
           </div>
+          <label className="scan-option">
+            <input
+              type="checkbox"
+              checked={recursive}
+              onChange={(e) => setRecursive(e.target.checked)}
+            />
+            Include subfolders
+          </label>
           <p className="hint">
-            💡 The app will create subfolders: thumbs, web, cancellate, preferite
+            💡 The app will create subfolders: thumbs, web, cancellate (deleted), preferite (favorites)
           </p>
         </div>
 
